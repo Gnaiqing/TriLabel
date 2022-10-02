@@ -176,9 +176,16 @@ def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug=9)
 	words = sentence.split(' ')
 	words = [word for word in words if word is not '']
 	num_words = len(words)
-	
+
+
 	augmented_sentences = []
 	num_new_per_technique = int(num_aug/4)+1
+
+	if num_words == 0:
+		# no need to change empty sentence
+		for i in range(num_aug+1):
+			augmented_sentences.append(sentence)
+		return augmented_sentences
 
 	#sr
 	if (alpha_sr > 0):

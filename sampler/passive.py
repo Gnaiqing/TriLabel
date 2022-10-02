@@ -1,4 +1,4 @@
-from base import BaseSampler
+from .base import BaseSampler
 
 
 class PassiveSampler(BaseSampler):

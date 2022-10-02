@@ -1,5 +1,5 @@
 from wrench.dataset import load_dataset
-from .synthetic import generate_syn_1, generate_syn_2, generate_syn_3
+from dataset.synthetic import generate_syn_1, generate_syn_2, generate_syn_3
 
 
 def load_real_dataset(dataset_path, dataset, extract_fn):
