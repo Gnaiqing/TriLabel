@@ -97,7 +97,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         # train encoder with contrastive loss
         dataloader = torch.utils.data.DataLoader(contrast_dataset, batch_size=args.batch_size)
         encoder = MLP(dim_in=contrast_features.shape[-1], dim_out=args.dim_out)
-        trainer = pl.Trainer(max_epochs=args.max_epochs, fast_dev_run=False, deterministic=True)
+        trainer = pl.Trainer(max_epochs=args.max_epochs, fast_dev_run=False)
         trainer.fit(model=encoder, train_dataloaders=dataloader)
         encoder.eval()
         # plot tsne
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
     parser.add_argument("--sampler", type=str, nargs="+", default="passive")
-    parser.add_argument("--sample_budget", type=int, default=300)  # Total sample budget
+    parser.add_argument("--sample_budget", type=int, default=500)  # Total sample budget
     parser.add_argument("--sample_budget_init",type=int, default=100)  # sample budget for initialization
     parser.add_argument("--sample_budget_inc", type=int, default=100)  # increased sample budget per iteration
     # revision model
@@ -185,12 +185,16 @@ if __name__ == "__main__":
     # label model and end model
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="mlp")
-    parser.add_argument("--em_repeats", type=int, default=3)
+    parser.add_argument("--em_epochs", type=int, default=100)
+    parser.add_argument("--em_batch_size", type=int, default=256)
+    parser.add_argument("--em_patience", type=int, default=10)
+    parser.add_argument("--em_lr", type=float, default=0.01)
+    parser.add_argument("--em_weight_decay", type=float, default=0.0001)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="acc")
-    parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")

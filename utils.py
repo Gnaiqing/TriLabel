@@ -29,16 +29,16 @@ def get_label_model(model_type):
     return label_model
 
 
-def get_end_model(model_type):
+def get_end_model(model_type, args):
     if model_type == "mlp":
         end_model = EndClassifierModel(
             backbone="MLP",
-            batch_size=256,
-            test_batch_size=512,
-            n_steps=5000,
+            batch_size=args.em_batch_size,
+            test_batch_size=args.em_batch_size,
             optimizer="Adam",
-            optimizer_lr=0.01,
-            optimizer_weight_decay=0.0001)
+            optimizer_lr=args.em_lr,
+            optimizer_weight_decay=args.em_weight_decay
+        )
     elif model_type == "bert":
         end_model = EndClassifierModel(
             batch_size=32,
@@ -84,21 +84,26 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
 
     lm_test = label_model.test(test_data, args.metric, test_data.labels)
     if args.end_model is not None:
-        end_model = get_end_model(args.end_model)
+        end_model = get_end_model(args.end_model, args)
         if args.use_soft_labels:
             aggregated_labels = label_model.predict_proba(covered_train_data)
         else:
             aggregated_labels = label_model.predict(covered_train_data)
+
+        n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
+        n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
+        n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
         end_model.fit(
             dataset_train=covered_train_data,
             y_train=aggregated_labels,
             dataset_valid=covered_valid_data,
             y_valid=pred_valid_labels,
-            evaluation_step=100,
+            evaluation_step=n_evaluation_steps,
             metric=args.metric,
-            patience=500,
+            patience=n_patience_steps,
             device=args.device,
-            verbose=True
+            verbose=True,
+            n_steps=n_steps,
         )
         em_test = end_model.test(test_data, args.metric, device=args.device)
 
@@ -119,16 +124,21 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
 def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
     assert args.end_model is not None
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    end_model = get_end_model(args.end_model)
+    end_model = get_end_model(args.end_model, args)
+    n_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_epochs
+    n_patience_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_patience
+    n_evaluation_steps = int(np.ceil(len(train_data) / args.em_batch_size))
     end_model.fit(
         dataset_train=train_data,
         y_train=train_data.labels,
         dataset_valid=valid_data,
-        evaluation_step=100,
+        y_valid=valid_data.labels,
+        evaluation_step=n_evaluation_steps,
         metric=args.metric,
-        patience=500,
+        patience=n_patience_steps,
         device=args.device,
-        verbose=True
+        verbose=True,
+        n_steps=n_steps,
     )
     em_test = end_model.test(test_data, args.metric, device=args.device)
     perf = {
