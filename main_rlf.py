@@ -111,7 +111,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     # revise dataset
     reviser = LFReviser(train_data, encoder, args.revision_model, seed=seed)
     reviser.train_revision_models(init_indices, init_labels)
-    revised_train_data = reviser.get_revised_dataset(train_data)
+    revised_train_data = reviser.revised_dataset
     revised_valid_data = reviser.get_revised_dataset(valid_data)
     revised_test_data = reviser.get_revised_dataset(test_data)
     lf_sum = revised_train_data.lf_summary()
@@ -119,7 +119,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
     update_results(results, perf, n_labeled)
     # spend remaining labelling budget
-    active_sampler = PassiveSampler(train_data, labeller,
+    active_sampler = PassiveSampler(revised_train_data, labeller,
                                     sampled_indices=init_indices, sampled_labels=init_labels, seed=seed*2)
     while n_labeled < args.sample_budget:
         n_to_sample = min(args.sample_budget - n_labeled, args.sample_budget_inc)
@@ -144,11 +144,11 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             encoder = None
 
         # revise dataset
-        reviser = LFReviser(train_data, encoder, args.revision_model, seed=seed)
+        reviser = LFReviser(revised_train_data, encoder, args.revision_model, seed=seed)
         reviser.train_revision_models(sampled_indices, sampled_labels)
-        revised_train_data = reviser.get_revised_dataset(train_data)
-        revised_valid_data = reviser.get_revised_dataset(valid_data)
-        revised_test_data = reviser.get_revised_dataset(test_data)
+        revised_train_data = reviser.revised_dataset
+        revised_valid_data = reviser.get_revised_dataset(revised_valid_data)
+        revised_test_data = reviser.get_revised_dataset(revised_test_data)
         lf_sum = revised_train_data.lf_summary()
         print(f"Revised LF summary at {n_labeled} labeled:\n", lf_sum)
         perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)

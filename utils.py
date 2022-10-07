@@ -1,7 +1,10 @@
 import numpy as np
 from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, ActiveWeasulModel
-from wrench.endmodel import EndClassifierModel
+from wrench.endmodel import EndClassifierModel, LogRegModel
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.manifold import TSNE
+from sklearn.pipeline import make_pipeline
 from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -53,6 +56,32 @@ def get_end_model(model_type, args):
             optimizer_lr=0.00005,
             optimizer_weight_decay=0.0
             )
+    elif model_type == "logistic":
+        end_model = LogRegModel(
+            lr=args.em_lr,
+            batch_size=args.em_batch_size,
+            test_batch_size=args.em_batch_size
+        )
+    elif model_type == "skl-hinge":
+        end_model = make_pipeline(
+            StandardScaler(),
+            SGDClassifier(
+            loss="hinge",
+            max_iter=args.em_epochs,
+            early_stopping=True
+            )
+        )
+    elif model_type == "skl-mlp":
+        end_model = make_pipeline(
+            StandardScaler(),
+            MLPClassifier(
+                max_iter=args.em_epochs,
+                early_stopping=True,
+                learning_rate_init=args.em_lr,
+                solver="adam"
+            )
+        )
+
     else:
         raise ValueError(f"end model {model_type} not implemented.")
     return end_model
@@ -90,22 +119,30 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
         else:
             aggregated_labels = label_model.predict(covered_train_data)
 
-        n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
-        n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
-        n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
-        end_model.fit(
-            dataset_train=covered_train_data,
-            y_train=aggregated_labels,
-            dataset_valid=covered_valid_data,
-            y_valid=pred_valid_labels,
-            evaluation_step=n_evaluation_steps,
-            metric=args.metric,
-            patience=n_patience_steps,
-            device=args.device,
-            verbose=True,
-            n_steps=n_steps,
-        )
-        em_test = end_model.test(test_data, args.metric, device=args.device)
+        if args.end_model in ["mlp", "logistic", "bert"]: # end model from wrench repo
+            n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
+            n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
+            n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
+            end_model.fit(
+                dataset_train=covered_train_data,
+                y_train=aggregated_labels,
+                dataset_valid=covered_valid_data,
+                y_valid=pred_valid_labels,
+                evaluation_step=n_evaluation_steps,
+                metric=args.metric,
+                patience=n_patience_steps,
+                device=args.device,
+                verbose=True,
+                n_steps=n_steps,
+            )
+            em_test = end_model.test(test_data, args.metric, device=args.device)
+        else:
+            end_model.fit(covered_train_data.features, aggregated_labels)
+            em_train = end_model.score(covered_train_data.features, aggregated_labels)
+            print(f"covered EM train: {em_train:.3f}")
+            y_true = test_data.labels
+            y_pred = end_model.predict(test_data.features)
+            em_test = score(y_true, y_pred, args.metric)
 
     else:
         em_test = np.nan
@@ -118,6 +155,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
         "lm_test": lm_test,
         "em_test": em_test
     }
+    print(f"EM test: {em_test:.3f}")
     return perf
 
 
@@ -125,25 +163,34 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
     assert args.end_model is not None
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
     end_model = get_end_model(args.end_model, args)
-    n_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_epochs
-    n_patience_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_patience
-    n_evaluation_steps = int(np.ceil(len(train_data) / args.em_batch_size))
-    end_model.fit(
-        dataset_train=train_data,
-        y_train=train_data.labels,
-        dataset_valid=valid_data,
-        y_valid=valid_data.labels,
-        evaluation_step=n_evaluation_steps,
-        metric=args.metric,
-        patience=n_patience_steps,
-        device=args.device,
-        verbose=True,
-        n_steps=n_steps,
-    )
-    em_test = end_model.test(test_data, args.metric, device=args.device)
+    if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
+        n_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_epochs
+        n_patience_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_patience
+        n_evaluation_steps = int(np.ceil(len(train_data) / args.em_batch_size))
+        end_model.fit(
+            dataset_train=train_data,
+            y_train=train_data.labels,
+            dataset_valid=valid_data,
+            y_valid=valid_data.labels,
+            evaluation_step=n_evaluation_steps,
+            metric=args.metric,
+            patience=n_patience_steps,
+            device=args.device,
+            verbose=True,
+            n_steps=n_steps,
+        )
+        em_test = end_model.test(test_data, args.metric, device=args.device)
+    else:
+        end_model.fit(train_data.features, train_data.labels)
+        em_train = end_model.score(train_data.features, train_data.labels)
+        print(f"Golden EM train: {em_train:.3f}")
+        y_true = test_data.labels
+        y_pred = end_model.predict(test_data.features)
+        em_test = score(y_true, y_pred, args.metric)
     perf = {
         "em_test": em_test,
     }
+    print(f"Golden EM test: {em_test:.3f}")
     return perf
 
 
