@@ -2,6 +2,8 @@ import numpy as np
 from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, ActiveWeasulModel
 from wrench.endmodel import EndClassifierModel, LogRegModel
 from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.manifold import TSNE
 from sklearn.pipeline import make_pipeline
@@ -14,6 +16,7 @@ from pytorch_lightning import seed_everything
 from pathlib import Path
 import os
 import json
+
 
 ABSTAIN = -1
 
@@ -30,6 +33,30 @@ def get_label_model(model_type):
     else:
         raise ValueError(f"label model {model_type} not supported.")
     return label_model
+
+
+def get_lf(lf_class, seed=None):
+    if lf_class == "logistic":
+        clf = LogisticRegression(random_state=seed, max_iter=500)
+    elif lf_class == "linear-svm":
+        clf = SVC(kernel="linear", probability=True, random_state=seed)
+    elif lf_class == "dt":
+        clf = DecisionTreeClassifier(random_state=seed)
+    else:
+        raise ValueError(f"LF Class {lf_class} not supported yet.")
+    return clf
+
+
+def get_revision_model(revision_model_class, seed=None):
+    if revision_model_class == "logistic":
+        clf = LogisticRegression(random_state=seed, max_iter=500)
+    elif revision_model_class == "linear-svm":
+        clf = SVC(kernel="linear", probability=True, random_state=seed)
+    elif revision_model_class == "dt":
+        clf = DecisionTreeClassifier(random_state=seed)
+    else:
+        raise ValueError(f"Revision model {revision_model_class} not supported yet.")
+    return clf
 
 
 def get_end_model(model_type, args):
@@ -85,6 +112,15 @@ def get_end_model(model_type, args):
     else:
         raise ValueError(f"end model {model_type} not implemented.")
     return end_model
+
+
+def get_sampler(sampler_type, train_data, labeller, **kwargs):
+    from sampler.passive import PassiveSampler
+    from sampler.lfcov import LFCovSampler
+    if sampler_type == "passive":
+        return PassiveSampler(train_data, labeller, **kwargs)
+    elif sampler_type == "lfcov":
+        return LFCovSampler(train_data, labeller, **kwargs)
 
 
 def score(y_true, y_pred, metric):

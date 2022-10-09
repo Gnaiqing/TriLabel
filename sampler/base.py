@@ -6,6 +6,7 @@ from labeller.labeller import get_item
 class BaseSampler:
     def __init__(self, train_data, labeller, **kwargs):
         self.train_data = train_data
+        self.weak_labels = np.array(train_data.weak_labels)
         self.labeller = labeller
         self.kwargs = kwargs
         self.sampled = np.zeros(len(self.train_data))
@@ -23,6 +24,9 @@ class BaseSampler:
 
     def sample_distinct(self, n=1):
         raise NotImplementedError()
+
+    def update_dataset(self, train_data):
+        self.train_data = train_data
 
     def label_selected_indices(self, indices):
         """
@@ -44,6 +48,9 @@ class BaseSampler:
         sampled_indices = np.nonzero(self.sampled != 0)[0]
         sampled_labels = self.sampled_labels[sampled_indices]
         return sampled_indices, sampled_labels
+
+    def get_n_sampled(self):
+        return np.sum(self.sampled)
 
 
 

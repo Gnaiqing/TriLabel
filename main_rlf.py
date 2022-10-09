@@ -2,18 +2,18 @@ import sys
 import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from wrench.dataset import get_dataset_type
-from sampler.passive import PassiveSampler
 from labeller.labeller import get_labeller
 from reviser.relief import LFReviser
 from pathlib import Path
 from torch.utils.data import TensorDataset
 import torch
 import json
+import copy
 import numpy as np
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from contrastive.mlp import MLP
-from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance
+from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance, get_sampler
 
 
 def get_contrast_features(data_home, dataset, extract_fn, n_aug=2):
@@ -40,7 +40,8 @@ def build_contrast_dataset(contrast_features, sampled_indices, sampled_labels, m
     """
     if mode == "all":
         labels = - np.ones(contrast_features.shape[0],dtype=int)
-        labels[sampled_indices] = sampled_labels
+        if sampled_indices is not None:
+            labels[sampled_indices] = sampled_labels
         contrast_dataset = TensorDataset(torch.tensor(contrast_features), torch.tensor(labels))
     elif mode == "labeled":
         contrast_dataset = TensorDataset(torch.tensor(contrast_features[sampled_indices,:,:]),
@@ -58,6 +59,28 @@ def update_results(results, perf, n_labeled):
         results[key].append(perf[key])
 
 
+def get_feature_encoder(train_data, sampled_indices, sampled_labels, args, n_labeled):
+    # build dataset for contrastive learning
+    if args.contrastive_mode is not None:
+        contrast_features = get_contrast_features(args.dataset_path, args.dataset, args.extract_fn,
+                                                  n_aug=args.n_aug)
+        contrast_dataset = build_contrast_dataset(contrast_features, sampled_indices, sampled_labels,
+                                                  mode=args.contrastive_mode, golden_labels=train_data.labels)
+        dataloader = torch.utils.data.DataLoader(contrast_dataset, batch_size=args.batch_size)
+        encoder = MLP(dim_in=contrast_features.shape[-1], dim_out=args.dim_out)
+        trainer = pl.Trainer(max_epochs=args.max_epochs, fast_dev_run=False)
+        trainer.fit(model=encoder, train_dataloaders=dataloader)
+        encoder.eval()
+        # plot tsne
+        if args.plot_tsne:
+            features = encoder(torch.tensor(train_data.features)).detach().cpu().numpy()
+            plot_tsne(features, train_data.labels, args.output_path, args.dataset,
+                      f"{args.dataset}_l={n_labeled}_{args.tag}", perplexity=args.perplexity)
+    else:
+        encoder = None
+    return encoder
+
+
 def run_rlf(train_data, valid_data, test_data, args, seed):
     """
     Run an active learning pipeline to revise label functions
@@ -73,6 +96,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         "lm_test": [],
         "em_test": [],
     }
+
     lf_sum = train_data.lf_summary()
     print("Original LF summary:\n", lf_sum)
     perf = evaluate_performance(train_data, valid_data, test_data, args, seed=seed)
@@ -83,76 +107,52 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     if args.plot_tsne:
         plot_tsne(train_data.features, train_data.labels, args.output_path, args.dataset,
                   f"{args.dataset}_l=0_{args.tag}", perplexity=args.perplexity)
-    # initialize labeled set
+
     labeller = get_labeller(args.labeller)
-    init_sampler = PassiveSampler(train_data, labeller, seed=seed)
-    init_indices, init_labels = init_sampler.sample_distinct(n=args.sample_budget_init)
-    # print("Init indices: \n", init_indices[:10])
-    n_labeled += args.sample_budget_init
-    # build dataset for contrastive learning
-    if args.contrastive_mode is not None:
-        contrast_features = get_contrast_features(args.dataset_path, args.dataset, args.extract_fn, n_aug=args.n_aug)
-        contrast_dataset = build_contrast_dataset(contrast_features, init_indices, init_labels,
-                                                  mode=args.contrastive_mode, golden_labels=train_data.labels)
-        # train encoder with contrastive loss
-        dataloader = torch.utils.data.DataLoader(contrast_dataset, batch_size=args.batch_size)
-        encoder = MLP(dim_in=contrast_features.shape[-1], dim_out=args.dim_out)
-        trainer = pl.Trainer(max_epochs=args.max_epochs, fast_dev_run=False)
-        trainer.fit(model=encoder, train_dataloaders=dataloader)
-        encoder.eval()
-        # plot tsne
-        if args.plot_tsne:
-            features = encoder(torch.tensor(train_data.features)).detach().cpu().numpy()
-            plot_tsne(features, train_data.labels, args.output_path, args.dataset,
-                      f"{args.dataset}_l={n_labeled}_{args.tag}", perplexity=args.perplexity)
-    else:
-        encoder = None
+    sampler = get_sampler(args.sampler, train_data, labeller)
+    sampled_indices,sampled_labels = sampler.get_sampled_points()
+    encoder = get_feature_encoder(train_data, sampled_indices,sampled_labels, args, n_labeled)
+    reviser = LFReviser(train_data, encoder, args.lf_class, args.revision_model_class,
+                        valid_data=valid_data, seed=seed)
+    revised_valid_data = copy.copy(valid_data)
+    revised_test_data = copy.copy(test_data)
 
-    # revise dataset
-    reviser = LFReviser(train_data, encoder, args.revision_model, seed=seed)
-    reviser.train_revision_models(init_indices, init_labels)
-    revised_train_data = reviser.revised_dataset
-    revised_valid_data = reviser.get_revised_dataset(valid_data)
-    revised_test_data = reviser.get_revised_dataset(test_data)
-    lf_sum = revised_train_data.lf_summary()
-    print(f"Revised LF summary at {n_labeled} labeled:\n", lf_sum)
-    perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
-    update_results(results, perf, n_labeled)
-    # spend remaining labelling budget
-    active_sampler = PassiveSampler(revised_train_data, labeller,
-                                    sampled_indices=init_indices, sampled_labels=init_labels, seed=seed*2)
     while n_labeled < args.sample_budget:
-        n_to_sample = min(args.sample_budget - n_labeled, args.sample_budget_inc)
-        active_sampler.sample_distinct(n=n_to_sample)
-        n_labeled += n_to_sample
-        sampled_indices, sampled_labels = active_sampler.get_sampled_points()
-        if args.contrastive_mode is not None:
-            contrast_dataset = build_contrast_dataset(contrast_features, sampled_indices, sampled_labels,
-                                                      mode=args.contrastive_mode, golden_labels=train_data.labels)
-            # train encoder with contrastive loss
-            dataloader = torch.utils.data.DataLoader(contrast_dataset, batch_size=args.batch_size)
-            encoder = MLP(dim_in=contrast_features.shape[-1], dim_out=args.dim_out)
-            trainer = pl.Trainer(max_epochs=args.max_epochs, fast_dev_run=False)
-            trainer.fit(model=encoder, train_dataloaders=dataloader)
-            encoder.eval()
-            # plot tsne
-            if args.plot_tsne:
-                features = encoder(torch.tensor(train_data.features)).detach().cpu().numpy()
-                plot_tsne(features, train_data.labels, args.output_path, args.dataset,
-                          f"{args.dataset}_l={n_labeled}_{args.tag}", perplexity=args.perplexity)
-        else:
-            encoder = None
 
-        # revise dataset
-        reviser = LFReviser(revised_train_data, encoder, args.revision_model, seed=seed)
-        reviser.train_revision_models(sampled_indices, sampled_labels)
-        revised_train_data = reviser.revised_dataset
-        revised_valid_data = reviser.get_revised_dataset(revised_valid_data)
-        revised_test_data = reviser.get_revised_dataset(revised_test_data)
-        lf_sum = revised_train_data.lf_summary()
-        print(f"Revised LF summary at {n_labeled} labeled:\n", lf_sum)
+        # step 1: sample from covered data to revise LFs
+        n_to_sample = min(args.sample_budget - n_labeled, args.sample_revise)
+        active_LF = [i for i in range(train_data.n_lf)]
+        sampler.sample_distinct(n=n_to_sample, active_LF=active_LF)
+        indices, labels = sampler.get_sampled_points()
+        reviser.revise_label_functions(indices, labels)
+        n_labeled = sampler.get_n_sampled()
+
+        # update datasets
+        revised_train_data = reviser.get_revised_dataset(dataset=None)
+        revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
+        revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
+        sampler.update_dataset(revised_train_data)
+        reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
         perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
         update_results(results, perf, n_labeled)
+
+        # step 2: if coverage below threshold, sample from uncovered data to generate new LFs
+        coverage = reviser.get_overall_coverage()
+        if coverage < args.desired_coverage:
+            n_to_sample = min(args.sample_budget - n_labeled, args.sample_append)
+            sampler.sample_distinct(n=n_to_sample, active_LF=None)
+            indices, labels = sampler.get_sampled_points()
+            reviser.append_label_functions(indices, labels)
+            n_labeled = sampler.get_n_sampled()
+
+            # update datasets
+            revised_train_data = reviser.get_revised_dataset(dataset=None)
+            revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
+            revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
+            sampler.update_dataset(revised_train_data)
+            reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+            perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
+            update_results(results, perf, n_labeled)
 
     return results
 
@@ -175,13 +175,15 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",type=int, default=64)
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
-    parser.add_argument("--sampler", type=str, nargs="+", default="passive")
-    parser.add_argument("--sample_budget", type=int, default=500)  # Total sample budget
-    parser.add_argument("--sample_budget_init",type=int, default=100)  # sample budget for initialization
-    parser.add_argument("--sample_budget_inc", type=int, default=100)  # increased sample budget per iteration
+    parser.add_argument("--sampler", type=str, default="lfcov")
+    parser.add_argument("--sample_budget", type=int, default=300)  # Total sample budget
+    parser.add_argument("--sample_append",type=int, default=50)  # sample budget for append new LF (per iter)
+    parser.add_argument("--sample_revise", type=int, default=50)  # sample budget for revise LF (per iter)
     # revision model
     parser.add_argument("--revision_method", type=str, default="relief") # "nashaat": only revise labeled points
-    parser.add_argument("--revision_model", type=str, default="logistic")
+    parser.add_argument("--lf_class", type=str, default="logistic")
+    parser.add_argument("--revision_model_class", type=str, default="logistic")
+    parser.add_argument("--use_valid_data", action="store_true")
     # label model and end model
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="mlp")
@@ -193,6 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
     parser.add_argument("--labeller", type=str, default="oracle")
+    parser.add_argument("--desired_coverage", type=float, default=0.95)
     parser.add_argument("--metric", type=str, default="acc")
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
