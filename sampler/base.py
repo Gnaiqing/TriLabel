@@ -27,6 +27,7 @@ class BaseSampler:
 
     def update_dataset(self, train_data):
         self.train_data = train_data
+        self.weak_labels = np.array(train_data.weak_labels)
 
     def label_selected_indices(self, indices):
         """

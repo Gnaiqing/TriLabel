@@ -63,6 +63,9 @@ class LFReviser:
         :param labels:
         :return:
         """
+        # clear previous append LFs
+        self.append_lfs = []
+        # generate new LFs based on not covered data
         abstain_mask = np.all(self.weak_labels == ABSTAIN, axis=1)
         abstain_indices = np.nonzero(abstain_mask)[0]
         labeled_abstain_mask = np.in1d(indices, abstain_indices)
@@ -96,6 +99,9 @@ class LFReviser:
                         self.append_lfs.append((clf, c))
 
     def revise_label_functions(self, indices, labels):
+        # clear previous revision models
+        self.revision_models = {}
+        self.discard_lfs = []
         # train revision models to revise existing LFs
         for lf_idx in range(self.train_data.n_lf):
             active_mask_l = self.weak_labels[indices, lf_idx] != ABSTAIN
@@ -153,31 +159,28 @@ class LFReviser:
                     print(f"Create revision model for LF {lf_idx}")
                     self.revision_models[lf_idx] = clf
 
-    def get_revised_dataset(self, dataset, indices=None, labels=None):
+    def get_revised_dataset(self, dataset, apply_revision_models=True, indices=None, labels=None):
         """
         Revise dataset
-        :param dataset: dataset to revise. If set to None, revise train data
+        :param dataset: dataset to revise
+        :param apply_revision_models: whether apply revision models to contrain LFs
         :param indices: indices of sampled train data
         :param labels: labels of sampled train data
         :return:
         """
-        use_train_set = False
-        if dataset is None:
-            use_train_set = True
-            dataset = self.train_data
         revised_weak_labels = np.array(dataset.weak_labels)
         revised_dataset = copy.copy(dataset)
-
         X = self.get_feature(dataset)
-        for lf_idx in range(dataset.n_lf):
-            if lf_idx in self.revision_models:
-                clf = self.revision_models[lf_idx]
-                y_pred = clf.predict(X)
-                revised_weak_labels[y_pred == 0, lf_idx] = ABSTAIN
-            elif use_train_set and indices is not None:
-                lf_output = revised_weak_labels[indices, lf_idx]
-                diff_indices = np.array(indices)[lf_output != np.array(labels)]
-                revised_weak_labels[diff_indices, lf_idx] = ABSTAIN
+        if apply_revision_models:
+            for lf_idx in range(dataset.n_lf):
+                if lf_idx in self.revision_models:
+                    clf = self.revision_models[lf_idx]
+                    y_pred = clf.predict(X)
+                    revised_weak_labels[y_pred == 0, lf_idx] = ABSTAIN
+                elif indices is not None:
+                    lf_output = revised_weak_labels[indices, lf_idx]
+                    diff_indices = np.array(indices)[lf_output != np.array(labels)]
+                    revised_weak_labels[diff_indices, lf_idx] = ABSTAIN
 
         for (clf, c) in self.append_lfs:
             pred = clf.predict(X)

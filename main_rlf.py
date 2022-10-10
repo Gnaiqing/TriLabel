@@ -114,29 +114,40 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     encoder = get_feature_encoder(train_data, sampled_indices,sampled_labels, args, n_labeled)
     reviser = LFReviser(train_data, encoder, args.lf_class, args.revision_model_class,
                         valid_data=valid_data, seed=seed)
-    revised_valid_data = copy.copy(valid_data)
-    revised_test_data = copy.copy(test_data)
+    # TODO: check whether a deepcopy is required
+    # when feeding dataset to reviser, only append/delete LFs. No revision for LF is performed.
+    revised_train_data_ad = copy.copy(train_data)
+    revised_valid_data_ad = copy.copy(valid_data)
+    revised_test_data_ad = copy.copy(test_data)
 
     while n_labeled < args.sample_budget:
 
         # step 1: sample from covered data to revise LFs
         n_to_sample = min(args.sample_budget - n_labeled, args.sample_revise)
-        active_LF = [i for i in range(train_data.n_lf)]
+        active_LF = [i for i in range(revised_train_data_ad.n_lf)]
         sampler.sample_distinct(n=n_to_sample, active_LF=active_LF)
         indices, labels = sampler.get_sampled_points()
         reviser.revise_label_functions(indices, labels)
         n_labeled = sampler.get_n_sampled()
-
         # update datasets
-        revised_train_data = reviser.get_revised_dataset(dataset=None)
-        revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
-        revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
+        revised_train_data = reviser.get_revised_dataset(dataset=revised_train_data_ad)
+        revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data_ad)
+        revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data_ad)
         lf_sum = revised_train_data.lf_summary()
         print(f"Revised LF summary at {n_labeled}:\n", lf_sum)
-        sampler.update_dataset(revised_train_data)
-        reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
         perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
         update_results(results, perf, n_labeled)
+
+        if args.accumulate_revision:
+            sampler.update_dataset(revised_train_data)
+            reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+        else:
+            revised_train_data_ad = reviser.get_revised_dataset(dataset=revised_train_data_ad,
+                                                                apply_revision_models=False)
+            revised_valid_data_ad = reviser.get_revised_dataset(dataset=revised_valid_data_ad,
+                                                                apply_revision_models=False)
+            sampler.update_dataset(revised_train_data_ad)
+            reviser.update_dataset(revised_train_data_ad, valid_data=revised_valid_data_ad)
 
         # step 2: if coverage below threshold, sample from uncovered data to generate new LFs
         coverage = reviser.get_overall_coverage()
@@ -148,15 +159,24 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             n_labeled = sampler.get_n_sampled()
 
             # update datasets
-            revised_train_data = reviser.get_revised_dataset(dataset=None)
-            revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
-            revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
+            revised_train_data = reviser.get_revised_dataset(dataset=revised_train_data_ad)
+            revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data_ad)
+            revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data_ad)
             lf_sum = revised_train_data.lf_summary()
             print(f"Revised LF summary at {n_labeled}:\n", lf_sum)
-            sampler.update_dataset(revised_train_data)
-            reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
             perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
             update_results(results, perf, n_labeled)
+
+            if args.accumulate_revision:
+                sampler.update_dataset(revised_train_data)
+                reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+            else:
+                revised_train_data_ad = reviser.get_revised_dataset(dataset=revised_train_data_ad,
+                                                                    apply_revision_models=False)
+                revised_valid_data_ad = reviser.get_revised_dataset(dataset=revised_valid_data_ad,
+                                                                    apply_revision_models=False)
+                sampler.update_dataset(revised_train_data_ad)
+                reviser.update_dataset(revised_train_data_ad, valid_data=revised_valid_data_ad)
 
     return results
 
@@ -207,6 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--tag", type=str, default="0")
     parser.add_argument("--load_results", type=str, default=None)
+    parser.add_argument("--accumulate_revision", action="store_true")
     # plot settings
     parser.add_argument("--plot_lf", action="store_true")  # plot LF accuracy and coverage over revision process
     parser.add_argument("--plot_tsne", action="store_true")  # plot density plots for samples
