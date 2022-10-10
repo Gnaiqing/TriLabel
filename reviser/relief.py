@@ -72,8 +72,9 @@ class LFReviser:
         for c in range(len(class_dist)):
             if class_dist[c] > self.min_labeled_size:
                 X = self.get_feature(self.train_data)[labeled_abstain_indices,:]
+                y = (labeled_abstain_labels == c).astype(int)
                 clf = get_lf(self.lf_class, self.seed)
-                clf.fit(X, labeled_abstain_labels)
+                clf.fit(X, y)
                 if self.valid_data is not None:
                     X_val = self.get_feature(self.valid_data)
                     y_val = np.array(self.valid_data.labels) == c
@@ -111,7 +112,10 @@ class LFReviser:
                 val_active_mask = check_weak_labels(self.valid_data)[:, lf_idx] != ABSTAIN
                 y_val = np.array(self.valid_data.labels)[val_active_mask] == \
                         np.array(self.valid_data.weak_labels)[val_active_mask, lf_idx]
-                lf_prev_acc_hat = np.mean(y_val)
+                if len(y_val) > 0:
+                    lf_prev_acc_hat = np.mean(y_val)
+                else:
+                    lf_prev_acc_hat = 0.0
                 if len(y_val) > self.min_labeled_size and lf_prev_acc_hat < 0.5:
                     print(f"Discard LF {lf_idx} for low accuracy.")
                     self.discard_lfs.append(lf_idx)
