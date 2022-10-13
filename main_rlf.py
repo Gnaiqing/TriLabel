@@ -113,7 +113,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     sampled_indices,sampled_labels = sampler.get_sampled_points()
     encoder = get_feature_encoder(train_data, sampled_indices,sampled_labels, args, n_labeled)
     reviser = LFReviser(train_data, encoder, args.lf_class, args.revision_model_class,
-                        valid_data=valid_data, seed=seed)
+                        only_append_uncovered=args.only_append_uncovered, valid_data=valid_data, seed=seed)
     # TODO: check whether a deepcopy is required
     # when feeding dataset to reviser, only append/delete LFs. No revision for LF is performed.
     revised_train_data_ad = copy.copy(train_data)
@@ -124,6 +124,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 
         # step 1: sample from covered data to revise LFs
         n_to_sample = min(args.sample_budget - n_labeled, args.sample_revise)
+        print("Start Revising LF stage...")
         active_LF = [i for i in range(revised_train_data_ad.n_lf)]
         sampler.sample_distinct(n=n_to_sample, active_LF=active_LF)
         indices, labels = sampler.get_sampled_points()
@@ -134,7 +135,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data_ad)
         revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data_ad)
         lf_sum = revised_train_data.lf_summary()
-        print(f"Revised LF summary at {n_labeled}:\n", lf_sum)
+        print(f"Revised LF summary at {n_labeled} (Revise):\n", lf_sum)
         perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
         update_results(results, perf, n_labeled)
 
@@ -149,10 +150,14 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             sampler.update_dataset(revised_train_data_ad)
             reviser.update_dataset(revised_train_data_ad, valid_data=revised_valid_data_ad)
 
+        if n_labeled == args.sample_budget:
+            break
+
         # step 2: if coverage below threshold, sample from uncovered data to generate new LFs
         coverage = reviser.get_overall_coverage()
         if coverage < args.desired_coverage:
             n_to_sample = min(args.sample_budget - n_labeled, args.sample_append)
+            print("Start appending LF stage...")
             sampler.sample_distinct(n=n_to_sample, active_LF=None)
             indices, labels = sampler.get_sampled_points()
             reviser.append_label_functions(indices, labels)
@@ -163,7 +168,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data_ad)
             revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data_ad)
             lf_sum = revised_train_data.lf_summary()
-            print(f"Revised LF summary at {n_labeled}:\n", lf_sum)
+            print(f"Revised LF summary at {n_labeled} (Append):\n", lf_sum)
             perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
             update_results(results, perf, n_labeled)
 
@@ -184,7 +189,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--device", type=str, default="cuda:1")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
@@ -200,12 +205,13 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
     parser.add_argument("--sampler", type=str, default="lfcov")
-    parser.add_argument("--sample_budget", type=int, default=300)  # Total sample budget
+    parser.add_argument("--sample_budget", type=int, default=350)  # Total sample budget
     parser.add_argument("--sample_append",type=int, default=50)  # sample budget for append new LF (per iter)
     parser.add_argument("--sample_revise", type=int, default=50)  # sample budget for revise LF (per iter)
     # revision model
     parser.add_argument("--revision_method", type=str, default="relief") # "nashaat": only revise labeled points
     parser.add_argument("--lf_class", type=str, default="logistic")
+    parser.add_argument("--only_append_uncovered", action="store_true") # let new LF only get activated on uncovered data
     parser.add_argument("--revision_model_class", type=str, default="logistic")
     parser.add_argument("--use_valid_data", action="store_true")
     # label model and end model

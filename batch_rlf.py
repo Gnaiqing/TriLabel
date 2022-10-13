@@ -10,11 +10,11 @@ dataset_list = [
 ]
 
 for dataset in dataset_list:
-    cmd = f"python main_rlf.py --dataset {dataset} --tag non_contrast --sample_budget 500 " \
-          f"--sample_budget_init 100 --sample_budget_inc 100"
+    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-all --sample_budget 350 " \
+          f"--sample_append 50 --sample_revise 50"
     print(cmd)
     os.system(cmd)
-    cmd = f"python main_rlf.py --dataset {dataset} --tag golden --contrastive_mode golden --sample_budget 500 " \
-          f"--sample_budget_init 100 --sample_budget_inc 100"
+    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-uncov --sample_budget 350 " \
+          f"--sample_append 50 --sample_revise 50 --only_append_uncovered"
     print(cmd)
     os.system(cmd)

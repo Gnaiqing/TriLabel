@@ -3,13 +3,13 @@ from sklearn.metrics import precision_score
 from sklearn.model_selection import train_test_split
 import numpy as np
 
-from utils import ABSTAIN, plot_tsne, get_lf, get_revision_model
+from utils import ABSTAIN, get_lf, get_revision_model
 import copy
 import torch
 
 
 class LFReviser:
-    def __init__(self, train_data, encoder, lf_class, revision_model_class,
+    def __init__(self, train_data, encoder, lf_class, revision_model_class, only_append_uncovered=True,
                  acc_threshold=0.6, min_labeled_size=10, valid_data=None, seed=None):
         """
         Initialize LF Reviser
@@ -17,6 +17,7 @@ class LFReviser:
         :param encoder: trained encoder model for feature transformation
         :param lf_class: LF class for new label functions
         :param revision_model_class: classifier type used to revise LF
+        :param only_append_uncovered: new added LF will only get activated on uncovered data
         :param acc_threshold: accuracy threshold for new LFs
         :param min_labeled_size: introduce new LF when sampled uncovered data reach that size for some class
         :param valid_data: validation dataset with golden labels
@@ -25,6 +26,7 @@ class LFReviser:
         self.valid_data = valid_data
         self.encoder = encoder
         self.lf_class = lf_class
+        self.only_append_uncovered = only_append_uncovered
         self.weak_labels = check_weak_labels(self.train_data)
         self.revision_model_class = revision_model_class
         self.acc_threshold = acc_threshold
@@ -38,10 +40,11 @@ class LFReviser:
         self.encoder = encoder
 
     def update_dataset(self, train_data, valid_data=None):
+        # update training set and valid set by append/remove LFs
+        # Note: the revision model will not be applied when update dataset. So the revision models will be kept.
         self.train_data = train_data
         self.valid_data = valid_data
         self.weak_labels = check_weak_labels(self.train_data)
-        self.revision_models = {}
         self.append_lfs = []
         self.discard_lfs = []
 
@@ -63,8 +66,6 @@ class LFReviser:
         :param labels:
         :return:
         """
-        # clear previous append LFs
-        self.append_lfs = []
         # generate new LFs based on not covered data
         abstain_mask = np.all(self.weak_labels == ABSTAIN, axis=1)
         abstain_indices = np.nonzero(abstain_mask)[0]
@@ -79,8 +80,14 @@ class LFReviser:
                 clf = get_lf(self.lf_class, self.seed)
                 clf.fit(X, y)
                 if self.valid_data is not None:
-                    X_val = self.get_feature(self.valid_data)
-                    y_val = np.array(self.valid_data.labels) == c
+                    if self.only_append_uncovered:
+                        uncovered_mask = np.all(np.array(self.valid_data.weak_labels) == ABSTAIN, axis=1)
+                        X_val = self.get_feature(self.valid_data)[uncovered_mask,:]
+                        y_val = np.array(self.valid_data.labels)[uncovered_mask] == c
+                    else:
+                        X_val = self.get_feature(self.valid_data)
+                        y_val = np.array(self.valid_data.labels) == c
+
                     y_pred = clf.predict(X_val)
                     lf_val_acc = precision_score(y_val, y_pred)
                     if lf_val_acc >= self.acc_threshold:
@@ -99,9 +106,6 @@ class LFReviser:
                         self.append_lfs.append((clf, c))
 
     def revise_label_functions(self, indices, labels):
-        # clear previous revision models
-        self.revision_models = {}
-        self.discard_lfs = []
         # train revision models to revise existing LFs
         for lf_idx in range(self.train_data.n_lf):
             active_mask_l = self.weak_labels[indices, lf_idx] != ABSTAIN
@@ -156,7 +160,10 @@ class LFReviser:
                 lf_prev_acc_hat = np.mean(y_val)
                 lf_prev_cov = len(X_act) / len(self.train_data)
                 if (2 * lf_acc_hat - 1) * lf_cov > (2 * lf_prev_acc_hat - 1) * lf_prev_cov:
-                    print(f"Create revision model for LF {lf_idx}")
+                    if lf_idx in self.revision_models:
+                        print(f"Update revision model for LF {lf_idx}")
+                    else:
+                        print(f"Create revision model for LF {lf_idx}")
                     self.revision_models[lf_idx] = clf
 
     def get_revised_dataset(self, dataset, apply_revision_models=True, indices=None, labels=None):
@@ -184,7 +191,11 @@ class LFReviser:
 
         for (clf, c) in self.append_lfs:
             pred = clf.predict(X)
-            new_LF_out = np.where(pred == 1, c, ABSTAIN).reshape(-1, 1)
+            if self.only_append_uncovered:
+                uncovered_mask = np.all(np.array(dataset.weak_labels) == ABSTAIN, axis=1)
+                new_LF_out = np.where((pred == 1) & uncovered_mask, c, ABSTAIN).reshape(-1, 1)
+            else:
+                new_LF_out = np.where(pred == 1, c, ABSTAIN).reshape(-1, 1)
             revised_weak_labels = np.concatenate((revised_weak_labels, new_LF_out), axis=1)
 
         if len(self.discard_lfs) > 0:
