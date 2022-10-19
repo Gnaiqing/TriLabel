@@ -9,7 +9,7 @@ class BaseSampler:
         self.weak_labels = np.array(train_data.weak_labels)
         self.labeller = labeller
         self.kwargs = kwargs
-        self.sampled = np.zeros(len(self.train_data))
+        self.sampled = np.repeat(False, len(self.train_data))
         self.sampled_labels = np.repeat(-1, len(self.train_data)).astype(int)
         if "sampled_indices" in kwargs:
             assert "sampled_labels" in kwargs
@@ -51,7 +51,7 @@ class BaseSampler:
         return sampled_indices, sampled_labels
 
     def get_n_sampled(self):
-        return np.sum(self.sampled)
+        return int(np.sum(self.sampled))
 
 
 

@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import copy
+from utils import ABSTAIN
 
 
 def plot_syn_dataset(X, y, weights, labels, title, figpath):
@@ -40,6 +42,36 @@ def plot_syn_dataset(X, y, weights, labels, title, figpath):
     plt.savefig(figpath)
 
 
+def generate_random_counterpart(dataset):
+    """
+    Generate a counterpart of corresponding dataset. The LF have same accuracy and active region, but randomly
+    misfires in its active region
+    :param dataset: origin dataset
+    :return: transformed_dataset. LF make mistakes randomly
+    """
+    trans_dataset = copy.copy(dataset)
+    L = np.array(dataset.weak_labels)
+    y = np.array(dataset.labels)
+    lf_sum = dataset.lf_summary()
+    print(lf_sum)
+    n_lf = dataset.n_lf
+    for i in range(n_lf):
+        active_indices = np.nonzero(L[:,i] != ABSTAIN)[0]
+        n_misfired = np.sum((L[:,i] != ABSTAIN) & (L[:,i] != y))
+        misfired_indices = np.random.choice(active_indices, n_misfired, replace=False)
+        L[active_indices, i] = y[active_indices] # correct labels
+        for idx in misfired_indices:
+            candidates = np.arange(dataset.n_class)
+            candidates = np.delete(candidates, y[idx])
+            y_pred = np.random.choice(candidates)
+            L[idx, i] = y_pred
+
+    trans_dataset.weak_labels = L.tolist()
+    trans_lf_sum = trans_dataset.lf_summary()
+    print(trans_lf_sum)
+    return trans_dataset
+
+
 def generate_gaussian_mixture(means, covs, sizes, labels, seed=0):
     """
     Generate datasets following gaussian mixture distribution
@@ -61,7 +93,7 @@ def generate_gaussian_mixture(means, covs, sizes, labels, seed=0):
         X = np.vstack((X,Xc))
         y = np.hstack((y,yc))
 
-    return X, y.astype(int).tolist()
+    return X.astype(np.float32), y.astype(int).tolist()
 
 
 def generate_label_matrix(X, weights, labels):

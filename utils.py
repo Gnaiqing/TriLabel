@@ -16,7 +16,7 @@ from pytorch_lightning import seed_everything
 from pathlib import Path
 import os
 import json
-
+import torch
 
 ABSTAIN = -1
 
@@ -82,7 +82,7 @@ def get_end_model(model_type, args):
             optimizer="AdamW",
             optimizer_lr=0.00005,
             optimizer_weight_decay=0.0
-            )
+        )
     elif model_type == "logistic":
         end_model = LogRegModel(
             lr=args.em_lr,
@@ -93,9 +93,9 @@ def get_end_model(model_type, args):
         end_model = make_pipeline(
             StandardScaler(),
             SGDClassifier(
-            loss="hinge",
-            max_iter=args.em_epochs,
-            early_stopping=True
+                loss="hinge",
+                max_iter=args.em_epochs,
+                early_stopping=True
             )
         )
     elif model_type == "skl-mlp":
@@ -137,6 +137,8 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
     covered_valid_data = valid_data.get_covered_subset()
     label_model = get_label_model(args.label_model)
     label_model.fit(dataset_train=covered_train_data)
+    n_covered = len(covered_train_data)
+    n = len(train_data)
     train_coverage = len(covered_train_data) / len(train_data)
     pred_train_labels = label_model.predict(covered_train_data)
     pred_valid_labels = label_model.predict(covered_valid_data)
@@ -155,7 +157,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
         else:
             aggregated_labels = label_model.predict(covered_train_data)
 
-        if args.end_model in ["mlp", "logistic", "bert"]: # end model from wrench repo
+        if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
             n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
             n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
             n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
@@ -238,7 +240,7 @@ def plot_tsne(features, labels, figure_path, dataset, title, perplexity=5.0, pca
     if len(features) > 1000:
         rng = default_rng(seed=0)
         indices = rng.choice(len(features), 1000, replace=False)
-        features = features[indices,:]
+        features = features[indices, :]
         labels = np.array(labels)[indices]
 
     if pca_reduction:
@@ -248,8 +250,20 @@ def plot_tsne(features, labels, figure_path, dataset, title, perplexity=5.0, pca
         features = pca.fit_transform(features)
 
     X = TSNE(perplexity=perplexity, init="pca", learning_rate="auto").fit_transform(features)
+    color_map = {
+        0: "red",
+        1: "green",
+        2: "yellow",
+        3: "blue",
+        4: "cyan",
+        5: "purple",
+        6: "orange",
+        7: "lime",
+        8: "violet"
+    }
+    color = [color_map[i] for i in labels]
     plt.figure()
-    plt.scatter(X[:,0], X[:,1], c=labels)
+    plt.scatter(X[:, 0], X[:, 1], c=color)
     plt.title(title)
     dirname = Path(figure_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)
@@ -259,9 +273,32 @@ def plot_tsne(features, labels, figure_path, dataset, title, perplexity=5.0, pca
 
 def save_results(results_list, output_path, dataset, filename):
     filepath = Path(output_path) / dataset / filename
-
+    dirname = Path(output_path) / dataset
+    Path(dirname).mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as write_file:
         json.dump({"data": results_list}, write_file, indent=4)
+
+
+def plot_LF_activation(dataset, lf_idx, figure_path, dataset_name, title,
+                       encoder=None, perplexity=5.0, pca_reduction=False):
+    """
+    Plot the region where an LF is activated. See where it makes correct/wrong predictions.
+    :param dataset: dataset to inspect
+    :param lf_idx: LF to inspect
+    :param title: title of plot
+    :return:
+    """
+    L = np.array(dataset.weak_labels)
+    active_mask = L[:, lf_idx] != ABSTAIN
+    if encoder is None:
+        features = dataset.features[active_mask, :]
+    else:
+        features = encoder(torch.tensor(dataset.features[active_mask, :])).detach().cpu().numpy()
+
+    labels = np.array(dataset.labels)[active_mask]
+    weak_labels = L[active_mask, lf_idx]
+    y = labels == weak_labels
+    plot_tsne(features, y, figure_path, dataset_name, title, perplexity=perplexity, pca_reduction=pca_reduction)
 
 
 def plot_results(results_list, figure_path, dataset, title, metric):
@@ -292,7 +329,7 @@ def plot_results(results_list, figure_path, dataset, title, metric):
     y = res["train_coverage"].mean(axis=0)
     y_stderr = res["train_coverage"].std(axis=0) / np.sqrt(n_run)
     ax.plot(x, y, label="train_coverage", c="b")
-    ax.fill_between(x, y-1.96*y_stderr, y+1.96*y_stderr, alpha=.1, color="b")
+    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="b")
 
     y = res["train_covered_acc"].mean(axis=0)
     y_stderr = res["train_covered_acc"].std(axis=0) / np.sqrt(n_run)
@@ -327,8 +364,3 @@ def plot_results(results_list, figure_path, dataset, title, metric):
     ax.legend()
     filename = os.path.join(dirname, f"result_test_{title}.jpg")
     fig.savefig(filename)
-
-
-
-
-

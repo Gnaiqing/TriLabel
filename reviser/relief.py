@@ -10,7 +10,7 @@ import torch
 
 class LFReviser:
     def __init__(self, train_data, encoder, lf_class, revision_model_class, only_append_uncovered=True,
-                 acc_threshold=0.6, min_labeled_size=10, valid_data=None, seed=None):
+                 acc_threshold=0.6, min_labeled_size=1, valid_data=None, seed=None):
         """
         Initialize LF Reviser
         :param train_data: dataset to revise
@@ -40,13 +40,13 @@ class LFReviser:
         self.encoder = encoder
 
     def update_dataset(self, train_data, valid_data=None):
-        # update training set and valid set by append/remove LFs
-        # Note: the revision model will not be applied when update dataset. So the revision models will be kept.
+        # update training set and valid set
         self.train_data = train_data
         self.valid_data = valid_data
         self.weak_labels = check_weak_labels(self.train_data)
         self.append_lfs = []
         self.discard_lfs = []
+        self.revision_models = {}
 
     def get_overall_coverage(self):
         abstain_mask = np.all(self.weak_labels == ABSTAIN, axis=1)
@@ -118,23 +118,29 @@ class LFReviser:
             n_pos = np.sum(y_act_l == 1)
             n_neg = np.sum(y_act_l == 0)
             # first filter out LF with accuracy < 0.5
-            if self.valid_data is not None:
-                val_active_mask = check_weak_labels(self.valid_data)[:, lf_idx] != ABSTAIN
-                y_val = np.array(self.valid_data.labels)[val_active_mask] == \
-                        np.array(self.valid_data.weak_labels)[val_active_mask, lf_idx]
-                if len(y_val) > 0:
-                    lf_prev_acc_hat = np.mean(y_val)
-                else:
-                    lf_prev_acc_hat = 0.0
-                if len(y_val) > self.min_labeled_size and lf_prev_acc_hat < 0.5:
-                    print(f"Discard LF {lf_idx} for low accuracy.")
-                    self.discard_lfs.append(lf_idx)
-                    continue
-            else:
-                if len(y_act_l) > self.min_labeled_size and n_pos <= n_neg:
-                    print(f"Discard LF {lf_idx} for low accuracy.")
-                    self.discard_lfs.append(lf_idx)
-                    continue
+            lf_prev_acc_hat = n_pos / (n_pos + n_neg)
+            if lf_prev_acc_hat < 0.5:
+                print(f"Discard LF {lf_idx} for low accuracy.")
+                self.discard_lfs.append(lf_idx)
+                continue
+
+            # if self.valid_data is not None:
+            #     val_active_mask = check_weak_labels(self.valid_data)[:, lf_idx] != ABSTAIN
+            #     y_val = np.array(self.valid_data.labels)[val_active_mask] == \
+            #             np.array(self.valid_data.weak_labels)[val_active_mask, lf_idx]
+            #     if len(y_val) > 0:
+            #         lf_prev_acc_hat = np.mean(y_val)
+            #     else:
+            #         lf_prev_acc_hat = 0.0
+            #     if len(y_val) > self.min_labeled_size and lf_prev_acc_hat < 0.5:
+            #         print(f"Discard LF {lf_idx} for low accuracy.")
+            #         self.discard_lfs.append(lf_idx)
+            #         continue
+            # else:
+            #     if len(y_act_l) > self.min_labeled_size and n_pos <= n_neg:
+            #         print(f"Discard LF {lf_idx} for low accuracy.")
+            #         self.discard_lfs.append(lf_idx)
+            #         continue
 
             if min(n_pos, n_neg) >= self.min_labeled_size:
                 # train revision model for that LF
@@ -157,7 +163,6 @@ class LFReviser:
                 X_act = self.get_feature(self.train_data)[active_mask, :]
                 y_pred_act = clf.predict(X_act)
                 lf_cov = np.sum(y_pred_act) / len(self.train_data)
-                lf_prev_acc_hat = np.mean(y_val)
                 lf_prev_cov = len(X_act) / len(self.train_data)
                 if (2 * lf_acc_hat - 1) * lf_cov > (2 * lf_prev_acc_hat - 1) * lf_prev_cov:
                     if lf_idx in self.revision_models:

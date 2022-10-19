@@ -6,15 +6,17 @@ dataset_list = [
     "sms",
     "trec",
     "yelp",
-    # "youtube"
+    "youtube"
 ]
 
 for dataset in dataset_list:
-    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-all --sample_budget 350 " \
-          f"--sample_append 50 --sample_revise 50"
+    # cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-all --sample_budget 500 " \
+    #       f"--sample_append 100 --sample_revise 100"
+    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-all_goldcst --sample_budget 500 " \
+          f"--sample_append 100 --sample_revise 100 --contrastive_mode golden --plot_tsne"
     print(cmd)
     os.system(cmd)
-    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-uncov --sample_budget 350 " \
-          f"--sample_append 50 --sample_revise 50 --only_append_uncovered"
+    cmd = f"python main_rlf.py --dataset {dataset} --tag linearLF-uncov_goldcst --sample_budget 500 " \
+          f"--sample_append 100 --sample_revise 100 --only_append_uncovered --contrastive_mode golden"
     print(cmd)
     os.system(cmd)

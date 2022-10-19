@@ -2,7 +2,21 @@ from .base import BaseSampler
 from utils import ABSTAIN
 import numpy as np
 
+
 class LFCovSampler(BaseSampler):
+    def get_n_unsampled(self, active_LF=None):
+        if active_LF is None:
+            active_mask = np.all(self.weak_labels == ABSTAIN, axis=1)
+            active_mask = active_mask & (~self.sampled)  # filter out sampled points
+
+        else:
+            active_LF = np.array(active_LF)
+            active_mask = np.any(self.weak_labels[:, active_LF] != ABSTAIN, axis=1)
+            active_mask = active_mask & (~self.sampled)  # filter out sampled points
+
+        n_unsampled = np.sum(active_mask)
+        return n_unsampled
+
     """
     Sample data points based on LF coverage
     """
@@ -19,12 +33,19 @@ class LFCovSampler(BaseSampler):
         indices = []
         if active_LF is None:
             active_mask = np.all(self.weak_labels == ABSTAIN, axis=1)
+            active_mask = active_mask & (~self.sampled) # filter out sampled points
             active_indices = np.nonzero(active_mask)[0]
 
         else:
             active_LF = np.array(active_LF)
             active_mask = np.any(self.weak_labels[:, active_LF] != ABSTAIN, axis=1)
+            active_mask = active_mask & (~self.sampled) # filter out sampled points
             active_indices = np.nonzero(active_mask)[0]
+
+        n_unsampled = np.sum(active_mask)
+
+        if n > n_unsampled:
+            raise ValueError(f"Sample size {n} Exceed remaining data size {n_unsampled}.")
 
         while n_sampled < n:
             idx = self.rng.choice(active_indices)
