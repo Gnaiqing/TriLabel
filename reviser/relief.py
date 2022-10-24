@@ -1,5 +1,5 @@
 from wrench.dataset.utils import check_weak_labels
-from sklearn.metrics import precision_score
+from sklearn.metrics import precision_score, accuracy_score
 from sklearn.model_selection import train_test_split
 import numpy as np
 
@@ -112,59 +112,56 @@ class LFReviser:
             active_lf_preds_l = self.weak_labels[indices, lf_idx][active_mask_l]
             active_indices_l = np.array(indices)[active_mask_l]
             active_labels_l = np.array(labels)[active_mask_l]
+            if len(active_labels_l) == 0:
+                continue
             X_act_l = self.get_feature(self.train_data)[active_indices_l, :]
-            y_act_l = (active_lf_preds_l == active_labels_l).astype(int)
+            # y_act_l = (active_lf_preds_l == active_labels_l).astype(int)
             clf = get_revision_model(self.revision_model_class, seed=self.seed)
-            n_pos = np.sum(y_act_l == 1)
-            n_neg = np.sum(y_act_l == 0)
+            n_pos = np.sum(active_labels_l == active_lf_preds_l)
+            n_neg = np.sum(active_labels_l != active_lf_preds_l)
             # first filter out LF with accuracy < 0.5
             lf_prev_acc_hat = n_pos / (n_pos + n_neg)
-            if lf_prev_acc_hat < 0.5:
+            if lf_prev_acc_hat < 0.5 and (n_pos + n_neg) >= 20:
                 print(f"Discard LF {lf_idx} for low accuracy.")
                 self.discard_lfs.append(lf_idx)
                 continue
 
-            # if self.valid_data is not None:
-            #     val_active_mask = check_weak_labels(self.valid_data)[:, lf_idx] != ABSTAIN
-            #     y_val = np.array(self.valid_data.labels)[val_active_mask] == \
-            #             np.array(self.valid_data.weak_labels)[val_active_mask, lf_idx]
-            #     if len(y_val) > 0:
-            #         lf_prev_acc_hat = np.mean(y_val)
-            #     else:
-            #         lf_prev_acc_hat = 0.0
-            #     if len(y_val) > self.min_labeled_size and lf_prev_acc_hat < 0.5:
-            #         print(f"Discard LF {lf_idx} for low accuracy.")
-            #         self.discard_lfs.append(lf_idx)
-            #         continue
-            # else:
-            #     if len(y_act_l) > self.min_labeled_size and n_pos <= n_neg:
-            #         print(f"Discard LF {lf_idx} for low accuracy.")
-            #         self.discard_lfs.append(lf_idx)
-            #         continue
-
-            if min(n_pos, n_neg) >= self.min_labeled_size:
+            if np.min(active_labels_l) != np.max(active_labels_l):
                 # train revision model for that LF
                 if self.valid_data is not None:
-                    clf = clf.fit(X_act_l, y_act_l)
-                    val_active_mask = check_weak_labels(self.valid_data)[:, lf_idx] != ABSTAIN
-                    X_val = self.get_feature(self.valid_data)[val_active_mask, :]
-                    y_val = np.array(self.valid_data.labels)[val_active_mask] == \
-                            np.array(self.valid_data.weak_labels)[val_active_mask, lf_idx]
-                    y_pred = clf.predict(X_val)
+                    clf = clf.fit(X_act_l, active_labels_l)
+                    y_act_l_pred = clf.predict(X_act_l)
+                    train_acc = accuracy_score(active_labels_l, y_act_l_pred)
+                    # print(f"Revision model accuracy for LF {lf_idx} on labeled set: {train_acc:.2f}")
+                    lf_preds_val = check_weak_labels(self.valid_data)[:, lf_idx]
+                    val_active_mask = lf_preds_val != ABSTAIN
+                    X_act_val = self.get_feature(self.valid_data)[val_active_mask, :]
+                    y_act_val = np.array(self.valid_data.labels)[val_active_mask]
+                    y_act_val_pred = clf.predict(X_act_val)  # class prediction
 
                 else:
                     # split 20% data as valid set
-                    X_train, X_val, y_train, y_val = train_test_split(X_act_l, y_act_l, test_size=0.2, random_state=self.seed)
-                    clf = clf.fit(X_train, y_train)
-                    y_pred = clf.predict(X_val)
+                    X_act_train, X_act_val, y_act_train, y_act_val = train_test_split(
+                        X_act_l, active_labels_l, test_size=0.2, random_state=self.seed)
+                    clf = clf.fit(X_act_train, y_act_train)
+                    y_act_val_pred = clf.predict(X_act_val)
 
-                lf_acc_hat = precision_score(y_val, y_pred)  # use accuracy after revision on valid set
-                active_mask = self.weak_labels[:, lf_idx] != ABSTAIN
-                X_act = self.get_feature(self.train_data)[active_mask, :]
-                y_pred_act = clf.predict(X_act)
-                lf_cov = np.sum(y_pred_act) / len(self.train_data)
-                lf_prev_cov = len(X_act) / len(self.train_data)
-                if (2 * lf_acc_hat - 1) * lf_cov > (2 * lf_prev_acc_hat - 1) * lf_prev_cov:
+                # keep prediction that consistent with classifier output
+                revised_lf_preds = lf_preds_val[lf_preds_val != ABSTAIN] # active LF preds on valid set
+                lf_prev_acc_hat = np.mean(revised_lf_preds == y_act_val)
+                mute_mask = y_act_val_pred != revised_lf_preds # mute LF preds different from model preds
+                revised_lf_preds[mute_mask] = ABSTAIN
+                lf_revised_acc_hat = np.sum(revised_lf_preds == y_act_val) / np.sum(revised_lf_preds != ABSTAIN)
+
+                active_mask_train = self.weak_labels[:, lf_idx] != ABSTAIN
+                lf_prev_cov = np.mean(active_mask_train)
+                X_act_train = self.get_feature(self.train_data)[active_mask_train, :]
+                active_lf_preds_train = self.weak_labels[active_mask_train, lf_idx]
+                active_y_preds_train = clf.predict(X_act_train)
+                lf_revised_cov = np.sum(active_lf_preds_train == active_y_preds_train) / len(self.train_data)
+                if lf_revised_acc_hat > lf_prev_acc_hat + 0.01:
+                    print(f"Before revision: Cov={lf_prev_cov:.2f}, Acc={lf_prev_acc_hat:.2f}")
+                    print(f"After  revision: Cov={lf_revised_cov:.2f}, Acc={lf_revised_acc_hat:.2f}")
                     if lf_idx in self.revision_models:
                         print(f"Update revision model for LF {lf_idx}")
                     else:
@@ -186,9 +183,10 @@ class LFReviser:
         if apply_revision_models:
             for lf_idx in range(dataset.n_lf):
                 if lf_idx in self.revision_models:
+                    lf_preds = check_weak_labels(revised_dataset)[:,lf_idx]
                     clf = self.revision_models[lf_idx]
                     y_pred = clf.predict(X)
-                    revised_weak_labels[y_pred == 0, lf_idx] = ABSTAIN
+                    revised_weak_labels[y_pred != lf_preds, lf_idx] = ABSTAIN
                 elif indices is not None:
                     lf_output = revised_weak_labels[indices, lf_idx]
                     diff_indices = np.array(indices)[lf_output != np.array(labels)]

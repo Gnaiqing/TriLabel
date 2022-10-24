@@ -137,8 +137,6 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
     covered_valid_data = valid_data.get_covered_subset()
     label_model = get_label_model(args.label_model)
     label_model.fit(dataset_train=covered_train_data)
-    n_covered = len(covered_train_data)
-    n = len(train_data)
     train_coverage = len(covered_train_data) / len(train_data)
     pred_train_labels = label_model.predict(covered_train_data)
     pred_valid_labels = label_model.predict(covered_valid_data)
@@ -164,8 +162,8 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
             end_model.fit(
                 dataset_train=covered_train_data,
                 y_train=aggregated_labels,
-                dataset_valid=covered_valid_data,
-                y_valid=pred_valid_labels,
+                dataset_valid=valid_data,
+                y_valid=valid_data.labels,
                 evaluation_step=n_evaluation_steps,
                 metric=args.metric,
                 patience=n_patience_steps,
@@ -228,7 +226,53 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
     perf = {
         "em_test": em_test,
     }
-    print(f"Golden EM test: {em_test:.3f}")
+    return perf
+
+
+def evaluate_golden_noise_reduction_performance(train_data, valid_data, test_data, args, seed):
+    seed_everything(seed, workers=True)  # reproducibility for LM & EM
+    covered_train_data = train_data.get_covered_subset()
+    label_model = get_label_model(args.label_model)
+    label_model.fit(dataset_train=covered_train_data)
+    pred_train_labels = label_model.predict(covered_train_data)
+    train_labels = np.array(covered_train_data.labels)
+    correct_indices = np.nonzero(pred_train_labels == train_labels)[0].astype(int)
+    filtered_train_data = covered_train_data.create_subset(correct_indices)
+    aggregated_labels = filtered_train_data.labels
+    if args.end_model is not None:
+        end_model = get_end_model(args.end_model, args)
+        if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
+            n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
+            n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
+            n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
+            end_model.fit(
+                dataset_train=filtered_train_data,
+                y_train=aggregated_labels,
+                dataset_valid=valid_data,
+                y_valid=valid_data.labels,
+                evaluation_step=n_evaluation_steps,
+                metric=args.metric,
+                patience=n_patience_steps,
+                device=args.device,
+                verbose=True,
+                n_steps=n_steps,
+            )
+            em_test = end_model.test(test_data, args.metric, device=args.device)
+        else:
+            end_model.fit(filtered_train_data.features, aggregated_labels)
+            em_train = end_model.score(filtered_train_data.features, aggregated_labels)
+            print(f"covered EM train: {em_train:.3f}")
+            y_true = test_data.labels
+            y_pred = end_model.predict(test_data.features)
+            em_test = score(y_true, y_pred, args.metric)
+
+    else:
+        em_test = np.nan
+
+    perf = {
+        "em_test": em_test
+    }
+    print(f"EM test: {em_test:.3f}")
     return perf
 
 
@@ -315,6 +359,7 @@ def plot_results(results_list, figure_path, dataset, title, metric):
         "train_covered_acc": [],
         "lm_test": [],
         "em_test": [],
+        "al_test": [],
         "em_test_golden": []
     }
 
@@ -357,6 +402,11 @@ def plot_results(results_list, figure_path, dataset, title, metric):
     y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
     ax.plot(x, y, label="End Model Accuracy", c="b")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="b")
+
+    y = res["al_test"].mean(axis=0)
+    y_stderr = res["al_test"].std(axis=0) / np.sqrt(n_run)
+    ax.plot(x, y, label="Active Learning Accuracy", c="g")
+    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
 
     ax.set_xlabel("label budget")
     ax.set_ylabel(metric)

@@ -76,6 +76,29 @@ def get_feature_encoder(train_data, sampled_indices, sampled_labels, args):
     return encoder
 
 
+def update_datasets(sampler, reviser, revised_train_data, revised_valid_data, revised_test_data, results, seed):
+    n_labeled = sampler.get_n_sampled()
+    # update datasets
+    revised_train_data = reviser.get_revised_dataset(dataset=revised_train_data)
+    revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
+    revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
+    lf_sum = revised_train_data.lf_summary()
+    print(f"Revised LF summary at {n_labeled} (Revise):\n", lf_sum)
+    perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
+    print("Train coverage: ", perf["train_coverage"])
+    print("Train covered acc: ", perf["train_covered_acc"])
+    update_results(results, perf, n_labeled)
+    # evaluate the performance of active learning
+    indices, labels = sampler.get_sampled_points()
+    labeled_train_data = train_data.create_subset(indices.tolist())
+    active_perf = evaluate_golden_performance(labeled_train_data, valid_data, test_data, args, seed=seed)
+    results["al_test"].append(active_perf["em_test"])
+    print("Active EM accuracy:", active_perf["em_test"])
+    sampler.update_dataset(revised_train_data)
+    reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+    return revised_train_data, revised_valid_data, revised_test_data
+
+
 def run_rlf(train_data, valid_data, test_data, args, seed):
     """
     Run an active learning pipeline to revise label functions
@@ -90,24 +113,27 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         "test_covered_acc": [],
         "lm_test": [],
         "em_test": [],
+        "al_test": []
     }
-
+    # record original stats
     lf_sum = train_data.lf_summary()
     print("Original LF summary:\n", lf_sum)
     perf = evaluate_performance(train_data, valid_data, test_data, args, seed=seed)
+    print("Train coverage: ", perf["train_coverage"])
+    print("Train covered acc: ", perf["train_covered_acc"])
     golden_perf = evaluate_golden_performance(train_data, valid_data, test_data, args, seed=seed)
+    print("Golden EM accuracy: ", golden_perf["em_test"])
     results["em_test_golden"] = golden_perf["em_test"]
     update_results(results, perf, 0)
-    n_labeled = 0
+    results["al_test"].append(np.nan)
+    # set labeller, sampler, reviser and encoder
+    labeller = get_labeller(args.labeller)
+    sampler = get_sampler(args.sampler, train_data, labeller)
+    sampled_indices, sampled_labels = sampler.get_sampled_points()
+    encoder = get_feature_encoder(train_data, sampled_indices,sampled_labels, args)
     if args.plot_tsne:
         plot_tsne(train_data.features, train_data.labels, args.output_path, args.dataset,
                   f"{args.dataset}_l=0_{args.tag}", perplexity=args.perplexity)
-
-    labeller = get_labeller(args.labeller)
-    sampler = get_sampler(args.sampler, train_data, labeller)
-    sampled_indices,sampled_labels = sampler.get_sampled_points()
-    encoder = get_feature_encoder(train_data, sampled_indices,sampled_labels, args)
-    if args.plot_tsne:
         features = encoder(torch.tensor(train_data.features)).detach().cpu().numpy()
         plot_tsne(features, train_data.labels, args.output_path, args.dataset,
                   f"{args.dataset}_l=all_{args.tag}", perplexity=args.perplexity)
@@ -118,55 +144,37 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     revised_valid_data = copy.copy(valid_data)
     revised_test_data = copy.copy(test_data)
 
-    while n_labeled < args.sample_budget:
-
+    while sampler.get_n_sampled() < args.sample_budget:
         # step 1: sample from covered data to revise LFs
-        n_to_sample = min(args.sample_budget - n_labeled, args.sample_revise)
+        n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_revise)
         print("Start Revising LF stage...")
         active_LF = [i for i in range(revised_train_data.n_lf)]
         sampler.sample_distinct(n=n_to_sample, active_LF=active_LF)
         indices, labels = sampler.get_sampled_points()
         reviser.revise_label_functions(indices, labels)
-        n_labeled = sampler.get_n_sampled()
-        # update datasets
-        revised_train_data = reviser.get_revised_dataset(dataset=revised_train_data)
-        revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
-        revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
-        lf_sum = revised_train_data.lf_summary()
-        print(f"Revised LF summary at {n_labeled} (Revise):\n", lf_sum)
-        perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
-        print("Train coverage: ", perf["train_coverage"])
-        print("Train covered acc: ", perf["train_covered_acc"])
-        update_results(results, perf, n_labeled)
-        # TODO: can we design some heuristic on when the update is required/beneficial?
-        sampler.update_dataset(revised_train_data)
-        reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+        revised_train_data, revised_valid_data, revised_test_data = update_datasets(sampler, reviser,
+                                                                                    revised_train_data,
+                                                                                    revised_valid_data,
+                                                                                    revised_test_data, results,
+                                                                                    seed)
 
-        if n_labeled == args.sample_budget:
+        if sampler.get_n_sampled() == args.sample_budget:
             break
 
         # step 2: if coverage below threshold, sample from uncovered data to generate new LFs
         coverage = reviser.get_overall_coverage()
         n_unsampled = sampler.get_n_unsampled()
-        n_to_sample = min(args.sample_budget - n_labeled, args.sample_append)
+        n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_append)
         if coverage < args.desired_coverage and n_unsampled >= n_to_sample:
             print("Start appending LF stage...")
             sampler.sample_distinct(n=n_to_sample, active_LF=None)
             indices, labels = sampler.get_sampled_points()
             reviser.append_label_functions(indices, labels)
-            n_labeled = sampler.get_n_sampled()
-            # update datasets
-            revised_train_data = reviser.get_revised_dataset(dataset=revised_train_data)
-            revised_valid_data = reviser.get_revised_dataset(dataset=revised_valid_data)
-            revised_test_data = reviser.get_revised_dataset(dataset=revised_test_data)
-            lf_sum = revised_train_data.lf_summary()
-            print(f"Revised LF summary at {n_labeled} (Append):\n", lf_sum)
-            perf = evaluate_performance(revised_train_data, revised_valid_data, revised_test_data, args, seed=seed)
-            print("Train coverage: ", perf["train_coverage"])
-            print("Train covered acc: ", perf["train_covered_acc"])
-            update_results(results, perf, n_labeled)
-            sampler.update_dataset(revised_train_data)
-            reviser.update_dataset(revised_train_data, valid_data=revised_valid_data)
+            revised_train_data, revised_valid_data, revised_test_data = update_datasets(sampler, reviser,
+                                                                                        revised_train_data,
+                                                                                        revised_valid_data,
+                                                                                        revised_test_data, results,
+                                                                                        seed)
 
     return results
 
@@ -174,7 +182,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda:1")
+    parser.add_argument("--device", type=str, default="cuda:0")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
@@ -185,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--contrastive_mode", type=str, default=None)
     parser.add_argument("--data_augment", type=str, default="eda")
     parser.add_argument("--n_aug", type=int, default=2)
-    parser.add_argument("--dim_out", type=int, default=5)
+    parser.add_argument("--dim_out", type=int, default=30)
     parser.add_argument("--batch_size",type=int, default=64)
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
@@ -203,7 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="mlp")
     parser.add_argument("--em_epochs", type=int, default=100)
-    parser.add_argument("--em_batch_size", type=int, default=256)
+    parser.add_argument("--em_batch_size", type=int, default=2048)
     parser.add_argument("--em_patience", type=int, default=100)
     parser.add_argument("--em_lr", type=float, default=0.01)
     parser.add_argument("--em_weight_decay", type=float, default=0.0001)
