@@ -1,12 +1,11 @@
 import numpy as np
-from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, ActiveWeasulModel
-from wrench.endmodel import EndClassifierModel, LogRegModel
+from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting
+from wrench.endmodel import EndClassifierModel, LogRegModel, Cosine
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.manifold import TSNE
-from sklearn.pipeline import make_pipeline
 from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
@@ -47,68 +46,110 @@ def get_lf(lf_class, seed=None):
     return clf
 
 
-def get_revision_model(revision_model_class, seed=None):
+def get_revision_model_kwargs(revision_model_class):
+    if revision_model_class == "voting":
+        kwargs = {
+            "base_classifiers": [("logistic", {"max_iter": 500}),
+                                 ("linear-svm", {}),
+                                 ("decision-tree", {})]
+        }
+    elif revision_model_class == "logistic":
+        kwargs = {"max_iter": 500}
+    else:
+        kwargs = {}
+    return kwargs
+
+
+def get_revision_model(revision_model_class, seed=None, **kwargs):
     if revision_model_class == "logistic":
-        clf = LogisticRegression(random_state=seed, max_iter=500)
+        clf = LogisticRegression(random_state=seed, **kwargs)
     elif revision_model_class == "linear-svm":
-        clf = SVC(kernel="linear", probability=True, random_state=seed)
-    elif revision_model_class == "dt":
-        clf = DecisionTreeClassifier(random_state=seed)
+        clf = SVC(kernel="linear", probability=True, random_state=seed, **kwargs)
+    elif revision_model_class == "decision-tree":
+        clf = DecisionTreeClassifier(random_state=seed, **kwargs)
+    elif revision_model_class == "random-forest":
+        clf = RandomForestClassifier(random_state=seed, **kwargs)
+    elif revision_model_class == "voting":
+        estimators = []
+        for (base_classifier, base_classifier_args) in kwargs["base_classifiers"]:
+            baseclf = get_revision_model(base_classifier, seed=seed, **base_classifier_args)
+            estimators.append((base_classifier, baseclf))
+        clf = VotingClassifier(estimators=estimators)
     else:
         raise ValueError(f"Revision model {revision_model_class} not supported yet.")
     return clf
 
 
-def get_end_model(model_type, args):
+def get_end_model(model_type):
     if model_type == "mlp":
         end_model = EndClassifierModel(
             backbone="MLP",
-            batch_size=args.em_batch_size,
-            test_batch_size=args.em_batch_size,
+            batch_size=512,
+            test_batch_size=512,
             optimizer="Adam",
-            optimizer_lr=args.em_lr,
-            optimizer_weight_decay=args.em_weight_decay
+            optimizer_lr=1e-2,
+            optimizer_weight_decay=1e-5
+        )
+    elif model_type == "logistic":
+        end_model = LogRegModel(
+            lr=1e-2,
+            batch_size=512,
+            test_batch_size=512
         )
     elif model_type == "bert":
         end_model = EndClassifierModel(
             batch_size=32,
             real_batch_size=32,
-            test_batch_size=512,
-            n_steps=1000,
+            test_batch_size=32,
             backbone="BERT",
             backbone_model_name="bert-base-cased",
             backbone_max_tokens=128,
             backbone_fine_tune_layers=-1,
             optimizer="AdamW",
-            optimizer_lr=0.00005,
+            optimizer_lr=5e-5,
             optimizer_weight_decay=0.0
         )
-    elif model_type == "logistic":
-        end_model = LogRegModel(
-            lr=args.em_lr,
-            batch_size=args.em_batch_size,
-            test_batch_size=args.em_batch_size
+    elif model_type == "roberta":
+        end_model = EndClassifierModel(
+            batch_size=32,
+            real_batch_size=32,
+            test_batch_size=32,
+            backbone="BERT",
+            backbone_model_name="roberta-base",
+            backbone_max_tokens=128,
+            backbone_fine_tune_layers=-1,
+            optimizer="AdamW",
+            optimizer_lr=5e-5,
+            optimizer_weight_decay=0.0
         )
-    elif model_type == "skl-hinge":
-        end_model = make_pipeline(
-            StandardScaler(),
-            SGDClassifier(
-                loss="hinge",
-                max_iter=args.em_epochs,
-                early_stopping=True
-            )
+    elif model_type == "cosine-bert":
+        end_model = Cosine(
+            batch_size=32,
+            real_batch_size=32,  # for accumulative gradient update
+            test_batch_size=32,
+            lamda=0.1,
+            backbone='BERT',
+            backbone_model_name='bert-base-cased',
+            backbone_max_tokens=128,
+            backbone_fine_tune_layers=-1,  # fine  tune all
+            optimizer='AdamW',
+            optimizer_lr=5e-5,
+            optimizer_weight_decay=1e-4,
+    )
+    elif model_type == "cosine-roberta":
+        end_model = Cosine(
+            batch_size=32,
+            real_batch_size=32,  # for accumulative gradient update
+            test_batch_size=32,
+            lamda=0.1,
+            backbone='BERT',
+            backbone_model_name='roberta-base',
+            backbone_max_tokens=128,
+            backbone_fine_tune_layers=-1,  # fine  tune all
+            optimizer='AdamW',
+            optimizer_lr=5e-5,
+            optimizer_weight_decay=1e-4,
         )
-    elif model_type == "skl-mlp":
-        end_model = make_pipeline(
-            StandardScaler(),
-            MLPClassifier(
-                max_iter=args.em_epochs,
-                early_stopping=True,
-                learning_rate_init=args.em_lr,
-                solver="adam"
-            )
-        )
-
     else:
         raise ValueError(f"end model {model_type} not implemented.")
     return end_model
@@ -134,145 +175,77 @@ def score(y_true, y_pred, metric):
 def evaluate_performance(train_data, valid_data, test_data, args, seed):
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
     covered_train_data = train_data.get_covered_subset()
-    covered_valid_data = valid_data.get_covered_subset()
     label_model = get_label_model(args.label_model)
     label_model.fit(dataset_train=covered_train_data)
     train_coverage = len(covered_train_data) / len(train_data)
     pred_train_labels = label_model.predict(covered_train_data)
-    pred_valid_labels = label_model.predict(covered_valid_data)
     train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
-
-    covered_test_data = test_data.get_covered_subset()
-    test_coverage = len(covered_test_data) / len(test_data)
-    pred_test_labels = label_model.predict(covered_test_data)
-    test_covered_acc = score(covered_test_data.labels, pred_test_labels, "acc")
-
-    lm_test = label_model.test(test_data, args.metric, test_data.labels)
-    if args.end_model is not None:
-        end_model = get_end_model(args.end_model, args)
-        if args.use_soft_labels:
-            aggregated_labels = label_model.predict_proba(covered_train_data)
-        else:
-            aggregated_labels = label_model.predict(covered_train_data)
-
-        if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
-            n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
-            n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
-            n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
-            end_model.fit(
-                dataset_train=covered_train_data,
-                y_train=aggregated_labels,
-                dataset_valid=valid_data,
-                y_valid=valid_data.labels,
-                evaluation_step=n_evaluation_steps,
-                metric=args.metric,
-                patience=n_patience_steps,
-                device=args.device,
-                verbose=True,
-                n_steps=n_steps,
-            )
-            em_test = end_model.test(test_data, args.metric, device=args.device)
-        else:
-            end_model.fit(covered_train_data.features, aggregated_labels)
-            em_train = end_model.score(covered_train_data.features, aggregated_labels)
-            print(f"covered EM train: {em_train:.3f}")
-            y_true = test_data.labels
-            y_pred = end_model.predict(test_data.features)
-            em_test = score(y_true, y_pred, args.metric)
-
+    end_model = get_end_model(args.end_model)
+    if args.use_soft_labels:
+        aggregated_labels = label_model.predict_proba(covered_train_data)
     else:
-        em_test = np.nan
+        aggregated_labels = label_model.predict(covered_train_data)
+
+    n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
+
+    if valid_data is not None:
+        covered_valid_data = valid_data.get_covered_subset()
+        pred_valid_labels = label_model.predict(covered_valid_data)
+        end_model.fit(
+            dataset_train=covered_train_data,
+            y_train=aggregated_labels,
+            dataset_valid=covered_valid_data,
+            y_valid=pred_valid_labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=True,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+
+        em_test = end_model.test(test_data, args.metric, device=args.device)
+    else:
+        end_model.fit(
+            dataset_train=covered_train_data,
+            y_train=aggregated_labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=True,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+        em_test = end_model.test(test_data, args.metric, device=args.device)
 
     perf = {
         "train_coverage": train_coverage,
         "train_covered_acc": train_covered_acc,
-        "test_coverage": test_coverage,
-        "test_covered_acc": test_covered_acc,
-        "lm_test": lm_test,
         "em_test": em_test
     }
-    print(f"EM test: {em_test:.3f}")
     return perf
 
 
 def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
-    assert args.end_model is not None
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    end_model = get_end_model(args.end_model, args)
-    if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
-        n_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_epochs
-        n_patience_steps = int(np.ceil(len(train_data) / args.em_batch_size)) * args.em_patience
-        n_evaluation_steps = int(np.ceil(len(train_data) / args.em_batch_size))
-        end_model.fit(
-            dataset_train=train_data,
-            y_train=train_data.labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            evaluation_step=n_evaluation_steps,
-            metric=args.metric,
-            patience=n_patience_steps,
-            device=args.device,
-            verbose=True,
-            n_steps=n_steps,
-        )
-        em_test = end_model.test(test_data, args.metric, device=args.device)
-    else:
-        end_model.fit(train_data.features, train_data.labels)
-        em_train = end_model.score(train_data.features, train_data.labels)
-        print(f"Golden EM train: {em_train:.3f}")
-        y_true = test_data.labels
-        y_pred = end_model.predict(test_data.features)
-        em_test = score(y_true, y_pred, args.metric)
+    end_model = get_end_model(args.end_model)
+    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
+    end_model.fit(
+        dataset_train=train_data,
+        y_train=train_data.labels,
+        dataset_valid=valid_data,
+        metric=args.metric,
+        device=args.device,
+        verbose=True,
+        n_steps=n_steps,
+        evaluation_step=evaluation_step
+    )
+    em_test = end_model.test(test_data, args.metric, device=args.device)
     perf = {
+        "train_coverage": 1.0,
+        "train_covered_acc": 1.0,
         "em_test": em_test,
     }
-    return perf
-
-
-def evaluate_golden_noise_reduction_performance(train_data, valid_data, test_data, args, seed):
-    seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    covered_train_data = train_data.get_covered_subset()
-    label_model = get_label_model(args.label_model)
-    label_model.fit(dataset_train=covered_train_data)
-    pred_train_labels = label_model.predict(covered_train_data)
-    train_labels = np.array(covered_train_data.labels)
-    correct_indices = np.nonzero(pred_train_labels == train_labels)[0].astype(int)
-    filtered_train_data = covered_train_data.create_subset(correct_indices)
-    aggregated_labels = filtered_train_data.labels
-    if args.end_model is not None:
-        end_model = get_end_model(args.end_model, args)
-        if args.end_model in ["mlp", "logistic", "bert"]:  # end model from wrench repo
-            n_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_epochs
-            n_patience_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size)) * args.em_patience
-            n_evaluation_steps = int(np.ceil(len(covered_train_data) / args.em_batch_size))
-            end_model.fit(
-                dataset_train=filtered_train_data,
-                y_train=aggregated_labels,
-                dataset_valid=valid_data,
-                y_valid=valid_data.labels,
-                evaluation_step=n_evaluation_steps,
-                metric=args.metric,
-                patience=n_patience_steps,
-                device=args.device,
-                verbose=True,
-                n_steps=n_steps,
-            )
-            em_test = end_model.test(test_data, args.metric, device=args.device)
-        else:
-            end_model.fit(filtered_train_data.features, aggregated_labels)
-            em_train = end_model.score(filtered_train_data.features, aggregated_labels)
-            print(f"covered EM train: {em_train:.3f}")
-            y_true = test_data.labels
-            y_pred = end_model.predict(test_data.features)
-            em_test = score(y_true, y_pred, args.metric)
-
-    else:
-        em_test = np.nan
-
-    perf = {
-        "em_test": em_test
-    }
-    print(f"EM test: {em_test:.3f}")
     return perf
 
 
@@ -345,7 +318,7 @@ def plot_LF_activation(dataset, lf_idx, figure_path, dataset_name, title,
     plot_tsne(features, y, figure_path, dataset_name, title, perplexity=perplexity, pca_reduction=pca_reduction)
 
 
-def plot_results(results_list, figure_path, dataset, title, metric):
+def plot_results(results_list, figure_path, dataset, title, filename, plot_labeled_frac=False):
     """
     Plot pipeline results
     :param results:
@@ -357,12 +330,9 @@ def plot_results(results_list, figure_path, dataset, title, metric):
     res = {
         "train_coverage": [],
         "train_covered_acc": [],
-        "lm_test": [],
         "em_test": [],
-        "al_test": [],
         "em_test_golden": []
     }
-
     for i in range(n_run):
         for key in res:
             res[key].append(results_list[i][key])
@@ -370,47 +340,31 @@ def plot_results(results_list, figure_path, dataset, title, metric):
     for key in res:
         res[key] = np.array(res[key])
 
-    x = results_list[0]["labeled"]
+    if plot_labeled_frac:
+        x = results_list[0]["frac_labeled"]
+    else:
+        x = results_list[0]["n_labeled"]
+
     y = res["train_coverage"].mean(axis=0)
     y_stderr = res["train_coverage"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="train_coverage", c="b")
+    ax.plot(x, y, label="Train label coverage", c="b")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="b")
 
     y = res["train_covered_acc"].mean(axis=0)
     y_stderr = res["train_covered_acc"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="train_covered_acc", c="r")
+    ax.plot(x, y, label="Train label accuracy", c="r")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
 
+    ax.axhline(y=res["em_test_golden"].mean(), color='k', linestyle='--')
+    y = res["em_test"].mean(axis=0)
+    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
+    ax.plot(x, y, label="Test set accuracy (EM)", c="g")
+    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
+
     ax.set_xlabel("label budget")
-    ax.set_ylabel("accuracy/coverage")
     ax.set_title(title)
     ax.legend()
     dirname = Path(figure_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)
-    filename = os.path.join(dirname, f"result_train_{title}.jpg")
-    fig.savefig(filename)
-
-    # then plot LM and EM's performance on test set
-    fig, ax = plt.subplots()
-    ax.axhline(y=res["em_test_golden"].mean(), color='k', linestyle='--')
-    y = res["lm_test"].mean(axis=0)
-    y_stderr = res["lm_test"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="Label Model Accuracy", c="r")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
-
-    y = res["em_test"].mean(axis=0)
-    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="End Model Accuracy", c="b")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="b")
-
-    y = res["al_test"].mean(axis=0)
-    y_stderr = res["al_test"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="Active Learning Accuracy", c="g")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
-
-    ax.set_xlabel("label budget")
-    ax.set_ylabel(metric)
-    ax.set_title(title)
-    ax.legend()
-    filename = os.path.join(dirname, f"result_test_{title}.jpg")
+    filename = os.path.join(dirname, filename)
     fig.savefig(filename)
