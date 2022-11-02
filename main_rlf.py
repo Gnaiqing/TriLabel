@@ -10,7 +10,6 @@ import torch
 import json
 import numpy as np
 import pytorch_lightning as pl
-from pytorch_lightning import seed_everything
 from contrastive.mlp import MLP
 from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance, get_sampler
 from utils import get_revision_model, get_revision_model_kwargs
@@ -105,7 +104,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 
     # set labeller, sampler, reviser and encoder
     labeller = get_labeller(args.labeller)
-    sampler = get_sampler(args.sampler, train_data, labeller)
+    sampler = get_sampler(args.sampler, train_data, labeller, label_model=args.label_model)
     sampled_indices, sampled_labels = sampler.get_sampled_points()
     encoder = get_feature_encoder(train_data, sampled_indices, sampled_labels, args)
 
@@ -131,8 +130,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 
     while sampler.get_n_sampled() < args.sample_budget:
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
-        active_LF = [i for i in range(train_data.n_lf)]
-        sampler.sample_distinct(n=n_to_sample, active_LF=active_LF)
+        sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
         reviser.revise_label_functions(indices, labels)
         revised_train_data = reviser.get_revised_dataset(train_data)
@@ -141,6 +139,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
         update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
+        sampler.update_dataset(revised_train_data)
         if args.verbose:
             lf_sum = revised_train_data.lf_summary()
             print(f"Revised LF summary at {n_labeled}({frac_labeled*100:.1f}%):")
@@ -168,23 +167,23 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",type=int, default=64)
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
-    parser.add_argument("--sampler", type=str, default="lfcov")
+    parser.add_argument("--sampler", type=str, default="passive")
     parser.add_argument("--sample_budget", type=Union[int, float], default=0.10)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=Union[int, float], default=0.01)  # sample budget per iteration
     # revision model
-    parser.add_argument("--revision_model_class", type=str, default="logistic")
+    parser.add_argument("--revision_model_class", type=str, default="voting")
     parser.add_argument("--concensus", type=str, default="majority")
     parser.add_argument("--revision_threshold", type=float, default=0.7)
-    parser.add_argument("--use_valid_data", action="store_true")
     # label model and end models
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="roberta")
     parser.add_argument("--em_epochs", type=int, default=5)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
+    parser.add_argument("--use_valid_labels", action="store_true")
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="acc")
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
@@ -211,9 +210,6 @@ if __name__ == "__main__":
         train_data, valid_data, test_data = load_synthetic_dataset(args.dataset)
     else:
         train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
-
-    if not args.use_valid_data:
-        valid_data = None
 
     np.random.seed(args.seed)
     run_seeds = np.random.randint(1, 100000, args.repeats)

@@ -1,11 +1,10 @@
 import os
 
 dataset_list = [
-    # "youtube",
-    # "trec",
-    # "agnews",
-    "imdb",
-    "yelp",
+    "youtube",
+    "trec",
+    "sms",
+    "semeval"
 ]
 
 revision_model_list = [
@@ -18,6 +17,6 @@ revision_model_list = [
 
 for dataset in dataset_list:
     for revision_model in revision_model_list:
-        cmd = f"python main_rlf.py --dataset {dataset} --revision_model_class {revision_model} --use_valid_data"
+        cmd = f"python main_rlf.py --dataset {dataset} --revision_model_class {revision_model}"
         print(cmd)
         os.system(cmd)

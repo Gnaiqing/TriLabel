@@ -1,5 +1,6 @@
 import numpy as np
-from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting
+from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, MeTaL
+from label_model.label_model import LabelModel
 from wrench.endmodel import EndClassifierModel, LogRegModel, Cosine
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.svm import SVC
@@ -20,15 +21,21 @@ import torch
 ABSTAIN = -1
 
 
-def get_label_model(model_type):
+def get_label_model(model_type, **kwargs):
     if model_type == "snorkel":
         label_model = Snorkel(lr=0.01, l2=0.0, n_epochs=100)
     elif model_type == "ds":
         label_model = DawidSkene()
     elif model_type == "mv":
         label_model = MajorityVoting()
-    elif model_type == "aw-metal":
-        label_model = ActiveWeasulModel(active_learning=False, penalty_strength=0.0)
+    elif model_type == "metal":
+        label_model = MeTaL(lr=0.01, n_epochs=100)
+    elif model_type == "aw":
+        if "penalty_strength" in kwargs:
+            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=False,
+                                     penalty_strength=kwargs["penalty_strength"])
+        else:
+            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=False)
     else:
         raise ValueError(f"label model {model_type} not supported.")
     return label_model
@@ -158,10 +165,21 @@ def get_end_model(model_type):
 def get_sampler(sampler_type, train_data, labeller, **kwargs):
     from sampler.passive import PassiveSampler
     from sampler.lfcov import LFCovSampler
+    from sampler.uncertain import UncertaintySampler
+    from sampler.maxkl import MaxKLSampler
     if sampler_type == "passive":
         return PassiveSampler(train_data, labeller, **kwargs)
     elif sampler_type == "lfcov":
         return LFCovSampler(train_data, labeller, **kwargs)
+    elif sampler_type == "uncertain":
+        return UncertaintySampler(train_data, labeller, kwargs["label_model"])
+    elif sampler_type == "maxkl":
+        if "penalty_strength" in kwargs:
+            return MaxKLSampler(train_data, labeller, kwargs["label_model"], penalty_strength=kwargs["penalty_strength"])
+        else:
+            return MaxKLSampler(train_data, labeller, kwargs["label_model"])
+    else:
+        raise ValueError(f"sampler {sampler_type} not implemented.")
 
 
 def score(y_true, y_pred, metric):
@@ -172,13 +190,51 @@ def score(y_true, y_pred, metric):
     return score
 
 
-def evaluate_performance(train_data, valid_data, test_data, args, seed):
+def evaluate_performance(train_data, valid_data, test_data, args, seed, ground_truth_labels=None):
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
     covered_train_data = train_data.get_covered_subset()
-    label_model = get_label_model(args.label_model)
-    label_model.fit(dataset_train=covered_train_data)
+
+    if args.label_model == "aw":
+        if hasattr(args, "penalty_strength"):
+            label_model = get_label_model(args.label_model, penalty_strength=args.penalty_strength)
+        else:
+            label_model = get_label_model(args.label_model)
+        # active WeaSuL model use ground truth labels to tune parameters
+        if ground_truth_labels is not None:
+            label_model.active_learning = True
+        if args.use_valid_labels:
+            label_model.fit(dataset_train=train_data,
+                            dataset_valid=valid_data,
+                            y_valid=valid_data.labels,
+                            ground_truth_labels=ground_truth_labels)
+        else:
+            label_model.fit(
+                dataset_train=train_data,
+                ground_truth_labels=ground_truth_labels
+            )
+    else:
+        label_model = get_label_model(args.label_model)
+        if args.use_valid_labels:
+            label_model.fit(dataset_train=covered_train_data,
+                            dataset_valid=valid_data,
+                            y_valid=valid_data.labels)
+        else:
+            mv = get_label_model("mv")
+            mv.fit(dataset_train=covered_train_data)
+            covered_valid_data = valid_data.get_covered_subset()
+            pred_valid_labels = mv.predict(covered_valid_data)
+            label_model.fit(dataset_train=covered_train_data,
+                            dataset_valid=covered_valid_data,
+                            y_valid=pred_valid_labels)
+
     train_coverage = len(covered_train_data) / len(train_data)
     pred_train_labels = label_model.predict(covered_train_data)
+    ### check overlap
+    weak_labels = np.array(covered_train_data.weak_labels)
+    has_overlap = np.any(weak_labels == pred_train_labels.reshape(-1,1), axis=1)
+    non_overlap_train_labels = pred_train_labels[~has_overlap]
+    non_overlap_weak_labels = weak_labels[~has_overlap, :]
+    ###
     train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
     end_model = get_end_model(args.end_model)
     if args.use_soft_labels:
@@ -189,7 +245,20 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
     n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
     evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
 
-    if valid_data is not None:
+    if args.use_valid_labels:
+        end_model.fit(
+            dataset_train=covered_train_data,
+            y_train=aggregated_labels,
+            dataset_valid=valid_data,
+            y_valid=valid_data.labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=True,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+
+    else:
         covered_valid_data = valid_data.get_covered_subset()
         pred_valid_labels = label_model.predict(covered_valid_data)
         end_model.fit(
@@ -204,19 +273,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed):
             evaluation_step=evaluation_step
         )
 
-        em_test = end_model.test(test_data, args.metric, device=args.device)
-    else:
-        end_model.fit(
-            dataset_train=covered_train_data,
-            y_train=aggregated_labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=True,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-        em_test = end_model.test(test_data, args.metric, device=args.device)
-
+    em_test = end_model.test(test_data, args.metric, device=args.device)
     perf = {
         "train_coverage": train_coverage,
         "train_covered_acc": train_covered_acc,
@@ -234,6 +291,7 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
         dataset_train=train_data,
         y_train=train_data.labels,
         dataset_valid=valid_data,
+        y_valid=valid_data.labels,
         metric=args.metric,
         device=args.device,
         verbose=True,
