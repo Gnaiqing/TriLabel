@@ -133,13 +133,28 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
         reviser.revise_label_functions(indices, labels)
-        revised_train_data = reviser.get_revised_dataset(train_data)
-        revised_valid_data = reviser.get_revised_dataset(valid_data)
-        perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args, seed=seed)
+        if args.revision_type in ["pre", "all"]:
+            # revise label functions
+            revised_train_data = reviser.get_revised_dataset(train_data)
+            revised_valid_data = reviser.get_revised_dataset(valid_data)
+            sampler.update_dataset(revised_train_data)
+        else:
+            revised_train_data = train_data
+            revised_valid_data = valid_data
+
+        if args.revision_type in ["post", "all"]:
+            rm_predict_labels = reviser.predict_labels(revised_train_data)
+        else:
+            rm_predict_labels = None
+
+        perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args,
+                                    rm_predict_labels=rm_predict_labels,
+                                    seed=seed)
+
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
         update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
-        sampler.update_dataset(revised_train_data)
+
         if args.verbose:
             lf_sum = revised_train_data.lf_summary()
             print(f"Revised LF summary at {n_labeled}({frac_labeled*100:.1f}%):")
@@ -174,6 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("--revision_model_class", type=str, default="voting")
     parser.add_argument("--concensus", type=str, default="majority")
     parser.add_argument("--revision_threshold", type=float, default=0.7)
+    parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post", "all"])
     # label model and end models
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="roberta")

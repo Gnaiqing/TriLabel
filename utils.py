@@ -190,7 +190,12 @@ def score(y_true, y_pred, metric):
     return score
 
 
-def evaluate_performance(train_data, valid_data, test_data, args, seed, ground_truth_labels=None):
+def evaluate_performance(train_data, valid_data, test_data, args, seed,
+                         ground_truth_labels=None,
+                         rm_predict_labels=None):
+    """
+    Evaluate the performance of weak supervision pipeline
+    """
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
     covered_train_data = train_data.get_covered_subset()
 
@@ -227,20 +232,36 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed, ground_t
                             dataset_valid=covered_valid_data,
                             y_valid=pred_valid_labels)
 
-    train_coverage = len(covered_train_data) / len(train_data)
-    pred_train_labels = label_model.predict(covered_train_data)
-    ### check overlap
-    weak_labels = np.array(covered_train_data.weak_labels)
-    has_overlap = np.any(weak_labels == pred_train_labels.reshape(-1,1), axis=1)
-    non_overlap_train_labels = pred_train_labels[~has_overlap]
-    non_overlap_weak_labels = weak_labels[~has_overlap, :]
-    ###
-    train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
-    end_model = get_end_model(args.end_model)
-    if args.use_soft_labels:
-        aggregated_labels = label_model.predict_proba(covered_train_data)
+    if rm_predict_labels is None:
+        # use the predicted label of label model
+        train_coverage = len(covered_train_data) / len(train_data)
+        pred_train_labels = label_model.predict(covered_train_data)
+        train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
+        end_model = get_end_model(args.end_model)
+        if args.use_soft_labels:
+            aggregated_labels = label_model.predict_proba(covered_train_data)
+        else:
+            aggregated_labels = label_model.predict(covered_train_data)
     else:
-        aggregated_labels = label_model.predict(covered_train_data)
+        # aggregate the predicted label of label model and revision model
+        weak_labels = np.array(train_data.weak_labels)
+        covered_mask = np.any(weak_labels != ABSTAIN, axis=1)
+        pred_mask = rm_predict_labels != ABSTAIN
+        pred_indices = np.nonzero(pred_mask)[0]
+        covered_indices = np.nonzero(covered_mask | pred_mask)[0]
+        covered_train_data = train_data.create_subset(covered_indices)
+        _, pred_pos, covered_pos = np.intersect1d(pred_indices, covered_indices, return_indices=True)
+        pred_train_labels = label_model.predict(covered_train_data)
+        pred_train_labels[covered_pos] = rm_predict_labels[pred_mask]
+        train_coverage = len(covered_train_data) / len(train_data)
+        train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
+        end_model = get_end_model(args.end_model)
+        if args.use_soft_labels:
+            aggregated_labels = label_model.predict_proba(covered_train_data)
+            aggregated_labels[covered_pos, :] = 0.0
+            aggregated_labels[covered_pos, rm_predict_labels[pred_mask]] = 1.0
+        else:
+            aggregated_labels = pred_train_labels
 
     n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
     evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch

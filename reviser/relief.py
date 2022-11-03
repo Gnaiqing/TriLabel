@@ -56,6 +56,27 @@ class LFReviser:
         clf.fit(X_sampled, y_sampled)
         self.clf = clf
 
+    def predict_labels(self, dataset):
+        if dataset is None:
+            return None
+
+        clf = self.clf
+        X = self.get_feature(dataset)
+        if self.revision_model_class == "voting":
+            ensemble_pred = clf.transform(X)
+            committee_size = ensemble_pred.shape[1]
+            y_pred = clf.predict(X)
+            n_agree = np.sum(ensemble_pred == y_pred.reshape(-1, 1), axis=1)
+            if self.concensus_criterion == "majority":
+                y_pred[n_agree <= committee_size // 2] = ABSTAIN
+            elif self.concensus_criterion == "all":
+                y_pred[n_agree < committee_size] = ABSTAIN
+        else:
+            y_pred = clf.predict(X)
+            y_probs = clf.predict_proba(X).max(axis=1)
+            y_pred[y_probs < self.revise_threshold] = ABSTAIN
+
+        return y_pred
 
     def get_revised_dataset(self, dataset):
         """
