@@ -300,6 +300,16 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
         "train_covered_acc": train_covered_acc,
         "em_test": em_test
     }
+    if rm_predict_labels is not None:
+        # record the coverage and accuracy of RM predict labels
+        rm_coverage = np.sum(rm_predict_labels != ABSTAIN) / len(rm_predict_labels)
+        rm_accuracy = np.sum(rm_predict_labels == np.array(train_data.labels)) / np.sum(rm_predict_labels != ABSTAIN)
+        perf["rm_coverage"] = rm_coverage
+        perf["rm_covered_acc"] = rm_accuracy
+    else:
+        perf["rm_coverage"] = np.nan
+        perf["rm_covered_acc"] = np.nan
+
     return perf
 
 
@@ -410,7 +420,9 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
         "train_coverage": [],
         "train_covered_acc": [],
         "em_test": [],
-        "em_test_golden": []
+        "em_test_golden": [],
+        "rm_coverage": [],
+        "rm_covered_acc": []
     }
     for i in range(n_run):
         for key in res:
@@ -439,6 +451,17 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
     ax.plot(x, y, label="Test set accuracy (EM)", c="g")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
+
+    # if not np.isnan(res["rm_coverage"]).all():
+    #     y = res["rm_coverage"].mean(axis=0)
+    #     y_stderr = res["rm_coverage"].std(axis=0) / np.sqrt(n_run)
+    #     ax.plot(x, y, label="Revision model coverage", c="orange")
+    #     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="orange")
+    #
+    #     y = res["rm_covered_acc"].mean(axis=0)
+    #     y_stderr = res["rm_covered_acc"].std(axis=0) / np.sqrt(n_run)
+    #     ax.plot(x, y, label="Revision model accuracy", c="cyan")
+    #     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="cyan")
 
     ax.set_xlabel("label budget")
     ax.set_title(title)

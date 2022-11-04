@@ -86,6 +86,8 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         "frac_labeled": [],
         "train_coverage": [],
         "train_covered_acc": [],
+        "rm_coverage": [],
+        "rm_covered_acc": [],
         "em_test": [],
     }
     # record original stats

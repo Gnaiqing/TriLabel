@@ -8,6 +8,8 @@ from utils import evaluate_performance, plot_tsne, plot_results, save_results, e
 import copy
 from typing import Union
 from main_rlf import update_results
+from utils import ABSTAIN
+from pathlib import Path
 
 
 def run_nashaat(train_data, valid_data, test_data, args, seed):
@@ -19,6 +21,8 @@ def run_nashaat(train_data, valid_data, test_data, args, seed):
         "frac_labeled": [],
         "train_coverage": [],
         "train_covered_acc": [],
+        "rm_coverage": [],
+        "rm_covered_acc": [],
         "em_test": [],
     }
     # record original stats
@@ -46,11 +50,21 @@ def run_nashaat(train_data, valid_data, test_data, args, seed):
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
-        revised_train_data = copy.copy(train_data)
-        revised_weak_labels = np.array(revised_train_data.weak_labels)
-        revised_weak_labels[indices, :] = labels.reshape((-1,1))
-        revised_train_data.weak_labels = revised_weak_labels.tolist()
-        perf = evaluate_performance(revised_train_data, valid_data, test_data, args, seed)
+        if args.revision_type == "pre":
+            revised_train_data = copy.copy(train_data)
+            revised_weak_labels = np.array(revised_train_data.weak_labels)
+            revised_weak_labels[indices, :] = labels.reshape((-1, 1))
+            revised_train_data.weak_labels = revised_weak_labels.tolist()
+            rm_predict_labels = None
+        else:
+            revised_train_data = train_data
+            rm_predict_labels = np.repeat(ABSTAIN, len(train_data))
+            rm_predict_labels[indices] = labels
+
+        perf = evaluate_performance(revised_train_data, valid_data, test_data, args,
+                                    rm_predict_labels=rm_predict_labels,
+                                    seed=seed)
+
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
         update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
@@ -88,22 +102,26 @@ if __name__ == "__main__":
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="acc")
     parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--revision_type", type=str, default="pre")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--tag", type=str, default="0")
-    parser.add_argument("--load_results", type=str, default=None)
+    parser.add_argument("--load_results", action="store_true")
     args = parser.parse_args()
     if args.sample_budget < 1:
         plot_labeled_frac = True
     else:
         plot_labeled_frac = False
 
-    if args.load_results is not None:
-        readfile = open(args.load_results, "r")
+    if args.load_results:
+        filepath = Path(args.output_path) / args.dataset / f"{args.label_model}-{args.end_model}-nashaat_{args.tag}.json"
+        readfile = open(filepath, "r")
         results = json.load(readfile)
         results_list = results["data"]
-        plot_results(results_list, args.output_path, args.dataset, f"{args.dataset}_{args.tag}", plot_labeled_frac)
+        plot_results(results_list, args.output_path, args.dataset, args.dataset,
+                     f"{args.label_model}-{args.end_model}-nashaat_{args.tag}.jpg",
+                     plot_labeled_frac)
         sys.exit(0)
 
     if args.dataset[:3] == "syn":
