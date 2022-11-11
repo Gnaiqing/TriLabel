@@ -23,19 +23,19 @@ ABSTAIN = -1
 
 def get_label_model(model_type, **kwargs):
     if model_type == "snorkel":
-        label_model = Snorkel(lr=0.01, l2=0.0, n_epochs=100)
+        label_model = Snorkel(lr=0.001, l2=0.0, n_epochs=1000)
     elif model_type == "ds":
         label_model = DawidSkene()
     elif model_type == "mv":
         label_model = MajorityVoting()
     elif model_type == "metal":
-        label_model = MeTaL(lr=0.01, n_epochs=100)
+        label_model = MeTaL(lr=0.001, n_epochs=1000)
     elif model_type == "aw":
         if "penalty_strength" in kwargs:
-            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=False,
+            label_model = LabelModel(n_epochs=1000, lr=0.001, active_learning=False,
                                      penalty_strength=kwargs["penalty_strength"])
         else:
-            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=False)
+            label_model = LabelModel(n_epochs=1000, lr=0.001, active_learning=False)
     else:
         raise ValueError(f"label model {model_type} not supported.")
     return label_model
@@ -82,6 +82,8 @@ def get_revision_model(revision_model_class, seed=None, **kwargs):
             baseclf = get_revision_model(base_classifier, seed=seed, **base_classifier_args)
             estimators.append((base_classifier, baseclf))
         clf = VotingClassifier(estimators=estimators)
+    elif revision_model_class == "expert-label":
+        clf = None
     else:
         raise ValueError(f"Revision model {revision_model_class} not supported yet.")
     return clf
@@ -224,6 +226,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
                             dataset_valid=valid_data,
                             y_valid=valid_data.labels)
         else:
+            # use majority voting to estimate valid labels
             mv = get_label_model("mv")
             mv.fit(dataset_train=covered_train_data)
             covered_valid_data = valid_data.get_covered_subset()
@@ -232,7 +235,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
                             dataset_valid=covered_valid_data,
                             y_valid=pred_valid_labels)
 
-    if rm_predict_labels is None:
+    if args.revision_type == "pre" or rm_predict_labels is None:
         # use the predicted label of label model
         train_coverage = len(covered_train_data) / len(train_data)
         pred_train_labels = label_model.predict(covered_train_data)
@@ -243,7 +246,7 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
         else:
             aggregated_labels = label_model.predict(covered_train_data)
     else:
-        # aggregate the predicted label of label model and revision model
+        # use labels predicted by revision model to correct labels predicted by LM
         weak_labels = np.array(train_data.weak_labels)
         covered_mask = np.any(weak_labels != ABSTAIN, axis=1)
         pred_mask = rm_predict_labels != ABSTAIN

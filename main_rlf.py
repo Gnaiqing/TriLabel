@@ -135,22 +135,19 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
         reviser.revise_label_functions(indices, labels)
+        y_hat_train = reviser.predict_labels("train")
+        y_hat_valid = reviser.predict_labels("valid")
         if args.revision_type in ["pre", "all"]:
             # revise label functions
-            revised_train_data = reviser.get_revised_dataset(train_data)
-            revised_valid_data = reviser.get_revised_dataset(valid_data)
+            revised_train_data = reviser.get_revised_dataset("train", y_hat_train, args.revise_LF_method)
+            revised_valid_data = reviser.get_revised_dataset("valid", y_hat_valid, args.revise_LF_method)
             sampler.update_dataset(revised_train_data)
         else:
             revised_train_data = train_data
             revised_valid_data = valid_data
 
-        if args.revision_type in ["post", "all"]:
-            rm_predict_labels = reviser.predict_labels(revised_train_data)
-        else:
-            rm_predict_labels = None
-
         perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args,
-                                    rm_predict_labels=rm_predict_labels,
+                                    rm_predict_labels=y_hat_train,
                                     seed=seed)
 
         n_labeled = sampler.get_n_sampled()
@@ -189,9 +186,12 @@ if __name__ == "__main__":
     parser.add_argument("--sample_per_iter",type=Union[int, float], default=0.01)  # sample budget per iteration
     # revision model
     parser.add_argument("--revision_model_class", type=str, default="voting")
-    parser.add_argument("--concensus", type=str, default="majority")
-    parser.add_argument("--revision_threshold", type=float, default=0.7)
+
+    parser.add_argument("--concensus", type=str, default="majority")  # used for voting only
+    parser.add_argument("--revision_threshold", type=float, default=0.7)  # used for single model
+    # pre: revise LF. post: clean labels. all: both revise LF and clean labels.
     parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post", "all"])
+    parser.add_argument("--revise_LF_method", type=str, default="correct", choices=["correct", "mute"])
     # label model and end models
     parser.add_argument("--label_model", type=str, default="mv")
     parser.add_argument("--end_model", type=str, default="roberta")
@@ -201,12 +201,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_valid_labels", action="store_true")
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="acc")
-    parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--tag", type=str, default="0")
-    parser.add_argument("--load_results", type=str, default=None)
+    parser.add_argument("--load_results", action="store_true")
     # plot settings
     parser.add_argument("--plot_lf", action="store_true")  # plot LF accuracy and coverage over revision process
     parser.add_argument("--plot_tsne", action="store_true")  # plot density plots for samples
@@ -217,11 +217,15 @@ if __name__ == "__main__":
     else:
         plot_labeled_frac = False
 
-    if args.load_results is not None:
-        readfile = open(args.load_results, "r")
+    if args.load_results:
+        filepath = Path(args.output_path) / args.dataset / \
+                   f"{args.label_model}-{args.end_model}-{args.revision_model_class}_{args.tag}.json"
+        readfile = open(filepath, "r")
         results = json.load(readfile)
         results_list = results["data"]
-        plot_results(results_list, args.output_path, args.dataset, f"{args.dataset}_{args.tag}", plot_labeled_frac)
+        plot_results(results_list, args.output_path, args.dataset, args.dataset,
+                     f"{args.label_model}-{args.end_model}-nashaat_{args.tag}.jpg",
+                     plot_labeled_frac)
         sys.exit(0)
 
     if args.dataset[:3] == "syn":
