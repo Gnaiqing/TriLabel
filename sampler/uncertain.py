@@ -6,7 +6,7 @@ import numpy as np
 
 class UncertaintySampler(BaseSampler):
     def __init__(self, train_data, labeller, label_model_type,
-                 only_sample_conflict=True, only_sample_covered=True, **kwargs):
+                 only_sample_conflict=False, only_sample_covered=True, **kwargs):
         super(UncertaintySampler, self).__init__(train_data, labeller, **kwargs)
         self.label_model = get_label_model(label_model_type)
         self.label_model.fit(dataset_train=train_data)

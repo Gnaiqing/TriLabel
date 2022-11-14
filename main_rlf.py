@@ -12,8 +12,10 @@ import numpy as np
 import pytorch_lightning as pl
 from contrastive.mlp import MLP
 from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance, get_sampler
-from utils import get_revision_model, get_revision_model_kwargs
+from utils import get_revision_model, get_label_model
+from sklearn.metrics import accuracy_score
 from typing import Union
+import copy
 
 
 def get_contrast_features(data_home, dataset, extract_fn, n_aug=2):
@@ -104,11 +106,16 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         print("Test set acc: ", perf["em_test"])
         print("Golden test set acc: ", golden_perf["em_test"])
 
-    # set labeller, sampler, reviser and encoder
+    # set labeller, sampler, label_model, reviser and encoder
     labeller = get_labeller(args.labeller)
     sampler = get_sampler(args.sampler, train_data, labeller, label_model=args.label_model)
+    label_model = get_label_model(args.label_model)
     sampled_indices, sampled_labels = sampler.get_sampled_points()
     encoder = get_feature_encoder(train_data, sampled_indices, sampled_labels, args)
+
+    # initialize revised train data
+    revised_train_data = copy.copy(train_data)
+    revised_valid_data = copy.copy(valid_data)
 
     if args.plot_tsne:
         plot_tsne(train_data.features, train_data.labels, args.output_path, args.dataset,
@@ -117,13 +124,9 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         plot_tsne(features, train_data.labels, args.output_path, args.dataset,
                   f"{args.dataset}_l=all_{args.tag}", perplexity=args.perplexity)
 
-    kwargs = get_revision_model_kwargs(args.revision_model_class)
     reviser = LFReviser(train_data, encoder, args.revision_model_class,
                         valid_data=valid_data,
-                        concensus_criterion=args.concensus,
-                        revise_threshold=args.revision_threshold,
-                        seed=seed,
-                        **kwargs
+                        seed=seed
                         )
 
     if args.sample_budget < 1:
@@ -134,14 +137,35 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
-        reviser.revise_label_functions(indices, labels)
-        y_hat_train = reviser.predict_labels("train")
-        y_hat_valid = reviser.predict_labels("valid")
+
+        # train a label model on current train data
+        covered_train_data = revised_train_data.get_covered_subset()
+        if args.use_valid_labels:
+            label_model.fit(dataset_train=covered_train_data,
+                            dataset_valid=revised_valid_data,
+                            y_valid=revised_valid_data.labels)
+        else:
+            # use majority voting to estimate valid labels
+            mv = get_label_model("mv")
+            mv.fit(dataset_train=covered_train_data)
+            covered_valid_data = revised_valid_data.get_covered_subset()
+            pred_valid_labels = mv.predict(covered_valid_data)
+            label_model.fit(dataset_train=covered_train_data,
+                            dataset_valid=covered_valid_data,
+                            y_valid=pred_valid_labels)
+        lm_pred = label_model.predict(revised_train_data)[indices]
+        lm_acc_hat = accuracy_score(labels, lm_pred) # estimate the accuracy of LM
+        cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
+        # train revision model
+        reviser.train_revision_model(indices, labels)
+        y_hat_train = reviser.predict_labels("train", cost)
+        y_hat_valid = reviser.predict_labels("valid", cost)
         if args.revision_type in ["pre", "all"]:
             # revise label functions
             revised_train_data = reviser.get_revised_dataset("train", y_hat_train, args.revise_LF_method)
             revised_valid_data = reviser.get_revised_dataset("valid", y_hat_valid, args.revise_LF_method)
             sampler.update_dataset(revised_train_data)
+            reviser.update_dataset(revised_train_data, revised_valid_data)
         else:
             revised_train_data = train_data
             revised_valid_data = valid_data
@@ -168,10 +192,10 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--device", type=str, default="cuda:1")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
-    parser.add_argument("--dataset_path", type=str, default="../datasets/")
+    parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
     parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
     # contrastive learning
     parser.add_argument("--contrastive_mode", type=str, default=None)
@@ -182,14 +206,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs",type=int, default=10)
     # sampler
     parser.add_argument("--sampler", type=str, default="passive")
-    parser.add_argument("--sample_budget", type=Union[int, float], default=0.10)  # Total sample budget
-    parser.add_argument("--sample_per_iter",type=Union[int, float], default=0.01)  # sample budget per iteration
+    parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
+    parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # revision model
-    parser.add_argument("--revision_model_class", type=str, default="voting")
-
-    parser.add_argument("--concensus", type=str, default="majority")  # used for voting only
-    parser.add_argument("--revision_threshold", type=float, default=0.7)  # used for single model
-    # pre: revise LF. post: clean labels. all: both revise LF and clean labels.
+    parser.add_argument("--revision_model_class", type=str, default="mlp")
     parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post", "all"])
     parser.add_argument("--revise_LF_method", type=str, default="correct", choices=["correct", "mute"])
     # label model and end models
@@ -216,6 +236,8 @@ if __name__ == "__main__":
         plot_labeled_frac = True
     else:
         plot_labeled_frac = False
+        args.sample_budget = int(args.sample_budget)
+        args.sample_per_iter = int(args.sample_per_iter)
 
     if args.load_results:
         filepath = Path(args.output_path) / args.dataset / \

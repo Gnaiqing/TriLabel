@@ -10,33 +10,22 @@ class LFReviser:
                  train_data,
                  encoder,
                  revision_model_class,
-                 min_sample_size=20,
                  valid_data=None,
-                 concensus_criterion=None,
-                 revise_threshold=0.7,
-                 seed=None,
-                 **kwargs):
+                 seed=None):
         """
         Initialize LF Reviser
         :param train_data: dataset to revise
         :param encoder: trained encoder model for feature transformation
         :param revision_model_class: classifier type used to revise LF ["logistic", "ensemble", "random-forest"]
-        :param min_sample_size: minimum sample size to train a revision classifier
         :param valid_data: validation dataset with golden labels
-        :param concensus_criterion: criterion for revision if multiple classifiers are used (for ensemble model)
-        :param revise_threshold: classifier would revise LF when it predict P(y|x)>threshold (for single model)
         :param seed: seed for revision models
         :param kwargs: other arguments for revision model
         """
         self.train_data = train_data
         self.valid_data = valid_data
         self.encoder = encoder
-        self.min_sample_size = min_sample_size
         self.revision_model_class = revision_model_class
-        self.concensus_criterion = concensus_criterion
-        self.revise_threshold = revise_threshold
         self.seed = seed
-        self.kwargs = kwargs
         self.clf = None  # model for revision. If set to None, only expert labeled data will be used.
         self.sampled_indices = None
         self.sampled_labels = None
@@ -44,24 +33,31 @@ class LFReviser:
     def update_encoder(self, encoder):
         self.encoder = encoder
 
+    def update_dataset(self, revised_train_data, revised_valid_data=None):
+        self.train_data = revised_train_data
+        self.valid_data = revised_valid_data
+
     def get_feature(self, dataset):
         if self.encoder is not None:
             return self.encoder(torch.tensor(dataset.features)).detach().cpu().numpy()
         else:
             return dataset.features
 
-    def revise_label_functions(self, indices, labels):
-        # train classifier (or ensemble of classifier) to predict P(Y|X)
+    def train_revision_model(self, indices, labels):
+        # train the revision model which can abstain on some data points
         self.sampled_indices = indices
         self.sampled_labels = labels
-        clf = get_revision_model(self.revision_model_class, seed=self.seed, **self.kwargs)
+        clf = get_revision_model(self.revision_model_class, seed=self.seed)
         X_sampled = self.get_feature(self.train_data)[indices, :]
         y_sampled = labels
         if clf is not None:
             clf.fit(X_sampled, y_sampled)
             self.clf = clf
 
-    def predict_labels(self, dataset_type):
+    def predict_labels(self, dataset_type, cost):
+        """
+        Use the
+        """
         if dataset_type == "train":
             dataset = self.train_data
         elif dataset_type == "valid":
@@ -71,21 +67,11 @@ class LFReviser:
 
         clf = self.clf
         X = self.get_feature(dataset)
-        if self.revision_model_class == "voting":
-            # ensemble model
-            ensemble_pred = clf.transform(X)
-            committee_size = ensemble_pred.shape[1]
-            y_pred = clf.predict(X)
-            n_agree = np.sum(ensemble_pred == y_pred.reshape(-1, 1), axis=1)
-            if self.concensus_criterion == "majority":
-                y_pred[n_agree <= committee_size // 2] = ABSTAIN
-            elif self.concensus_criterion == "all":
-                y_pred[n_agree < committee_size] = ABSTAIN
-        elif clf is not None:
-            # single model
+        if clf is not None:
+            threshold = 1 - cost  # optimal threshold based on Chow's rule
             y_pred = clf.predict(X)
             y_probs = clf.predict_proba(X).max(axis=1)
-            y_pred[y_probs < self.revise_threshold] = ABSTAIN
+            y_pred[y_probs < threshold] = ABSTAIN
         else:
             # use expert labels only
             y_pred = np.repeat(ABSTAIN, len(dataset))

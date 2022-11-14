@@ -3,20 +3,26 @@ import os
 dataset_list = [
     "youtube",
     "trec",
-    "sms",
+    "imdb",
+    "yelp",
+    "census",
     "semeval"
 ]
 
+label_model_list = [
+    "mv",
+    "metal"
+]
+
 revision_model_list = [
-    # "logistic",
-    # "linear-svm",
-    # "decision-tree",
-    # "random-forest",
-    "voting"
+    "mlp",
+    "expert-label"
 ]
 
 for dataset in dataset_list:
-    for revision_model in revision_model_list:
-        cmd = f"python main_rlf.py --dataset {dataset} --revision_model_class {revision_model}"
-        print(cmd)
-        os.system(cmd)
+    for lm in label_model_list:
+        for rm in revision_model_list:
+            cmd = f"python main_rlf.py --dataset {dataset} --label_model {lm} --end_model mlp --em_epochs 100" \
+                  f" --revision_model_class {rm} --use_valid_labels --repeats 20 --tag 2"
+            print(cmd)
+            os.system(cmd)

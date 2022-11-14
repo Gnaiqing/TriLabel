@@ -12,7 +12,7 @@ class LFCovSampler(BaseSampler):
         else:
             active_LF = np.array(active_LF)
             active_mask = np.any(self.weak_labels[:, active_LF] != ABSTAIN, axis=1)
-            active_mask = active_mask & (~self.sampled)  # filter out sampled points
+            active_mask = active_mask & (self.sampled)  # filter out sampled points
 
         n_unsampled = np.sum(active_mask)
         return n_unsampled

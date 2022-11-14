@@ -1,10 +1,11 @@
 import numpy as np
 from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, MeTaL
-from label_model.label_model import LabelModel
+from active_weasul.label_model import LabelModel
 from wrench.endmodel import EndClassifierModel, LogRegModel, Cosine
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.manifold import TSNE
 from sklearn.metrics import accuracy_score
@@ -53,35 +54,17 @@ def get_lf(lf_class, seed=None):
     return clf
 
 
-def get_revision_model_kwargs(revision_model_class):
-    if revision_model_class == "voting":
-        kwargs = {
-            "base_classifiers": [("logistic", {"max_iter": 500}),
-                                 ("linear-svm", {}),
-                                 ("decision-tree", {})]
-        }
-    elif revision_model_class == "logistic":
-        kwargs = {"max_iter": 500}
-    else:
-        kwargs = {}
-    return kwargs
-
-
-def get_revision_model(revision_model_class, seed=None, **kwargs):
+def get_revision_model(revision_model_class, seed=None):
     if revision_model_class == "logistic":
-        clf = LogisticRegression(random_state=seed, **kwargs)
+        clf = LogisticRegression(max_iter=500, random_state=seed)
     elif revision_model_class == "linear-svm":
-        clf = SVC(kernel="linear", probability=True, random_state=seed, **kwargs)
+        clf = SVC(kernel="linear", probability=True, random_state=seed)
     elif revision_model_class == "decision-tree":
-        clf = DecisionTreeClassifier(random_state=seed, **kwargs)
+        clf = DecisionTreeClassifier(random_state=seed)
     elif revision_model_class == "random-forest":
-        clf = RandomForestClassifier(random_state=seed, **kwargs)
-    elif revision_model_class == "voting":
-        estimators = []
-        for (base_classifier, base_classifier_args) in kwargs["base_classifiers"]:
-            baseclf = get_revision_model(base_classifier, seed=seed, **base_classifier_args)
-            estimators.append((base_classifier, baseclf))
-        clf = VotingClassifier(estimators=estimators)
+        clf = RandomForestClassifier(random_state=seed)
+    elif revision_model_class == "mlp":
+        clf = MLPClassifier(max_iter=500, learning_rate_init=0.01, random_state=seed)
     elif revision_model_class == "expert-label":
         clf = None
     else:
