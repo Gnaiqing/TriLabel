@@ -147,17 +147,21 @@ def get_end_model(model_type):
     return end_model
 
 
-def get_sampler(sampler_type, train_data, labeller, **kwargs):
-    from sampler.passive import PassiveSampler
-    from sampler.lfcov import LFCovSampler
-    from sampler.uncertain import UncertaintySampler
-    from sampler.maxkl import MaxKLSampler
+def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder, **kwargs):
+    from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, \
+        RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler
     if sampler_type == "passive":
-        return PassiveSampler(train_data, labeller, **kwargs)
-    elif sampler_type == "lfcov":
-        return LFCovSampler(train_data, labeller, **kwargs)
+        return PassiveSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "uncertain":
-        return UncertaintySampler(train_data, labeller, kwargs["label_model"])
+        return UncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+    elif sampler_type == "rm-uncertain":
+        return RmUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+    elif sampler_type == "DAL":
+        return DALSampler(train_data, labeller, label_model, revision_model, encoder)
+    elif sampler_type == "abstain":
+        return AbstainSampler(train_data, labeller, label_model, revision_model, encoder)
+    elif sampler_type == "disagreement":
+        return DisagreementSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "maxkl":
         if "penalty_strength" in kwargs:
             return MaxKLSampler(train_data, labeller, kwargs["label_model"], penalty_strength=kwargs["penalty_strength"])

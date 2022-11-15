@@ -3,9 +3,9 @@ from scipy.stats import entropy
 import numpy as np
 
 
-class UncertaintySampler(BaseSampler):
+class RmUncertaintySampler(BaseSampler):
     def sample_distinct(self, n=1):
-        probs = self.label_model.predict_proba(self.train_data)
+        probs = self.revision_model.predict_proba(self.rep)
         uncertainty = entropy(probs, axis=1)
         candidate_uncertainty = uncertainty[self.candidate_indices]
         order = np.argsort(candidate_uncertainty)[::-1]

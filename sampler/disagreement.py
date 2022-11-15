@@ -3,12 +3,18 @@ from scipy.stats import entropy
 import numpy as np
 
 
-class UncertaintySampler(BaseSampler):
+class DisagreementSampler(BaseSampler):
     def sample_distinct(self, n=1):
-        probs = self.label_model.predict_proba(self.train_data)
-        uncertainty = entropy(probs, axis=1)
-        candidate_uncertainty = uncertainty[self.candidate_indices]
-        order = np.argsort(candidate_uncertainty)[::-1]
+        lm_probs = self.label_model.predict_proba(self.train_data)
+        if self.revision_model is not None:
+            rm_probs = self.revision_model.predict_proba(self.rep)
+            diff = entropy(lm_probs, rm_probs, axis=1)
+        else:
+            # if revision model is not set, use the entropy of label model as uncertainty sampler
+            diff = entropy(lm_probs, axis=1)
+
+        diff = diff[self.candidate_indices]
+        order = np.argsort(diff)[::-1]
         n_sampled = 0
         i = 0
         indices = []
@@ -23,4 +29,5 @@ class UncertaintySampler(BaseSampler):
 
         labels = self.label_selected_indices(indices)
         return indices, labels
+
 

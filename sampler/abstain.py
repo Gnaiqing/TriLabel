@@ -1,14 +1,15 @@
 from .base import BaseSampler
-from scipy.stats import entropy
 import numpy as np
+from utils import ABSTAIN
 
 
-class UncertaintySampler(BaseSampler):
+"""
+Abstain sampler: sample points where less LFs get activated
+"""
+class AbstainSampler(BaseSampler):
     def sample_distinct(self, n=1):
-        probs = self.label_model.predict_proba(self.train_data)
-        uncertainty = entropy(probs, axis=1)
-        candidate_uncertainty = uncertainty[self.candidate_indices]
-        order = np.argsort(candidate_uncertainty)[::-1]
+        active_counts = np.sum(self.weak_labels != ABSTAIN, axis=1)[self.candidate_indices]
+        order = np.argsort(active_counts)
         n_sampled = 0
         i = 0
         indices = []
@@ -23,4 +24,3 @@ class UncertaintySampler(BaseSampler):
 
         labels = self.label_selected_indices(indices)
         return indices, labels
-

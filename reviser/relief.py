@@ -80,6 +80,19 @@ class LFReviser:
 
         return y_pred
 
+    def predict_proba(self, dataset_type):
+        assert self.clf is not None
+        if dataset_type == "train":
+            dataset = self.train_data
+        elif dataset_type == "valid":
+            dataset = self.valid_data
+        else:
+            raise ValueError(f"dataset type {dataset_type} not supported.")
+
+        X = self.get_feature(dataset)
+        probs = self.clf.predict_proba(X)
+        return probs
+
     def get_revised_dataset(self, dataset_type, y_pred, revise_LF_method):
         """
         Revise dataset

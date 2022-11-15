@@ -1,27 +1,10 @@
 from .base import BaseSampler
-from utils import get_label_model, ABSTAIN
+from utils import ABSTAIN
 from scipy.stats import entropy
 import numpy as np
 
 
 class MaxKLSampler(BaseSampler):
-    def __init__(self, train_data, labeller, label_model_type, **kwargs):
-        super(MaxKLSampler, self).__init__(train_data, labeller, **kwargs)
-        self.label_model_type = label_model_type
-        self.label_model = get_label_model(label_model_type, **kwargs)
-        if label_model_type == "aw" and "ground_truth_labels" in kwargs:
-            self.label_model.fit(dataset_train=train_data, ground_truth_labels=kwargs["ground_truth_labels"])
-        else:
-            self.label_model.fit(dataset_train=train_data)
-
-    def update_dataset(self, train_data, ground_truth_labels=None):
-        super(MaxKLSampler, self).update_dataset(train_data)
-        self.kwargs["ground_truth_labels"] = ground_truth_labels
-        if self.label_model_type == "aw":
-            self.label_model.fit(dataset_train=train_data, ground_truth_labels=ground_truth_labels)
-        else:
-            self.label_model.fit(dataset_train=train_data)
-
     def sample_distinct(self, n=1):
         unique_combs, unique_idx, unique_inverse = np.unique(
             self.weak_labels, return_index=True, return_inverse=True, axis=0)

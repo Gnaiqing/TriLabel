@@ -11,10 +11,8 @@ import json
 import numpy as np
 import pytorch_lightning as pl
 from contrastive.mlp import MLP
-from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance, get_sampler
-from utils import get_revision_model, get_label_model
+from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, get_sampler, get_label_model
 from sklearn.metrics import accuracy_score
-from typing import Union
 import copy
 
 
@@ -108,26 +106,18 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 
     # set labeller, sampler, label_model, reviser and encoder
     labeller = get_labeller(args.labeller)
-    sampler = get_sampler(args.sampler, train_data, labeller, label_model=args.label_model)
     label_model = get_label_model(args.label_model)
-    sampled_indices, sampled_labels = sampler.get_sampled_points()
-    encoder = get_feature_encoder(train_data, sampled_indices, sampled_labels, args)
+    label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
+    encoder = None
+    reviser = LFReviser(train_data, encoder, args.revision_model_class,
+                        valid_data=valid_data, seed=seed
+                        )
+
+    sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser.clf, encoder)
 
     # initialize revised train data
     revised_train_data = copy.copy(train_data)
     revised_valid_data = copy.copy(valid_data)
-
-    if args.plot_tsne:
-        plot_tsne(train_data.features, train_data.labels, args.output_path, args.dataset,
-                  f"{args.dataset}_l=0_{args.tag}", perplexity=args.perplexity)
-        features = encoder(torch.tensor(train_data.features)).detach().cpu().numpy()
-        plot_tsne(features, train_data.labels, args.output_path, args.dataset,
-                  f"{args.dataset}_l=all_{args.tag}", perplexity=args.perplexity)
-
-    reviser = LFReviser(train_data, encoder, args.revision_model_class,
-                        valid_data=valid_data,
-                        seed=seed
-                        )
 
     if args.sample_budget < 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
@@ -137,24 +127,13 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
-
-        # train a label model on current train data
-        covered_train_data = revised_train_data.get_covered_subset()
+        # estimate current accuracy of label model using valid labels
         if args.use_valid_labels:
-            label_model.fit(dataset_train=covered_train_data,
-                            dataset_valid=revised_valid_data,
-                            y_valid=revised_valid_data.labels)
+            lm_pred = label_model.predict(revised_valid_data)
+            lm_acc_hat = accuracy_score(revised_valid_data.labels, lm_pred)
         else:
-            # use majority voting to estimate valid labels
-            mv = get_label_model("mv")
-            mv.fit(dataset_train=covered_train_data)
-            covered_valid_data = revised_valid_data.get_covered_subset()
-            pred_valid_labels = mv.predict(covered_valid_data)
-            label_model.fit(dataset_train=covered_train_data,
-                            dataset_valid=covered_valid_data,
-                            y_valid=pred_valid_labels)
-        lm_pred = label_model.predict(revised_train_data)[indices]
-        lm_acc_hat = accuracy_score(labels, lm_pred) # estimate the accuracy of LM
+            raise NotImplementedError()
+
         cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
         # train revision model
         reviser.train_revision_model(indices, labels)
@@ -164,11 +143,6 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             # revise label functions
             revised_train_data = reviser.get_revised_dataset("train", y_hat_train, args.revise_LF_method)
             revised_valid_data = reviser.get_revised_dataset("valid", y_hat_valid, args.revise_LF_method)
-            sampler.update_dataset(revised_train_data)
-            reviser.update_dataset(revised_train_data, revised_valid_data)
-        else:
-            revised_train_data = train_data
-            revised_valid_data = valid_data
 
         perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args,
                                     rm_predict_labels=y_hat_train,
@@ -177,6 +151,12 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
         update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
+        # update stats of label model, sampler and reviser
+        label_model.fit(dataset_train=revised_train_data, dataset_valid=revised_valid_data)
+        sampler.update_stats(revised_train_data,
+                             label_model=label_model,
+                             revision_model=reviser.clf,
+                             encoder=encoder)
 
         if args.verbose:
             lf_sum = revised_train_data.lf_summary()
@@ -184,6 +164,8 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             print(lf_sum)
             print("Train coverage: ", perf["train_coverage"])
             print("Train covered acc: ", perf["train_covered_acc"])
+            print("Revision model coverage: ", perf["rm_coverage"])
+            print("Revision model acc: ", perf["rm_covered_acc"])
             print("Test set acc: ", perf["em_test"])
 
     return results
