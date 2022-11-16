@@ -1,6 +1,9 @@
 from wrench.dataset.utils import check_weak_labels
 import numpy as np
-from utils import ABSTAIN, get_revision_model
+from torch.utils.data import TensorDataset
+from utils import ABSTAIN
+from reviser.models import MLPNet, DropOutNet, MLPTempNet
+from reviser.trainers import NeuralNetworkTrainer
 import copy
 import torch
 
@@ -9,14 +12,14 @@ class LFReviser:
     def __init__(self,
                  train_data,
                  encoder,
-                 revision_model_class,
+                 revision_model,
                  valid_data=None,
                  seed=None):
         """
         Initialize LF Reviser
         :param train_data: dataset to revise
         :param encoder: trained encoder model for feature transformation
-        :param revision_model_class: classifier type used to revise LF ["logistic", "ensemble", "random-forest"]
+        :param revision_model: model used to revise LF. One of ["mlp", "dropout", "mlp-temp"]
         :param valid_data: validation dataset with golden labels
         :param seed: seed for revision models
         :param kwargs: other arguments for revision model
@@ -24,9 +27,22 @@ class LFReviser:
         self.train_data = train_data
         self.valid_data = valid_data
         self.encoder = encoder
-        self.revision_model_class = revision_model_class
+        self.train_rep = self.get_feature(self.train_data)
+        self.revision_model_type = revision_model
+        if self.revision_model_type == "mlp":
+            self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
+            self.trainer = NeuralNetworkTrainer(self.clf)
+        elif self.revision_model_type == "mlp-temp":
+            self.clf = MLPTempNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
+            self.trainer = NeuralNetworkTrainer(self.clf)
+        elif self.revision_model_type == "dropout":
+            self.clf = DropOutNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
+            self.trainer = NeuralNetworkTrainer(self.clf)
+        elif self.revision_model_type == "expert-label":
+            self.clf = None  # only expert labeled data will be used.
+            self.trainer = None
+
         self.seed = seed
-        self.clf = None  # model for revision. If set to None, only expert labeled data will be used.
         self.sampled_indices = None
         self.sampled_labels = None
 
@@ -47,12 +63,20 @@ class LFReviser:
         # train the revision model which can abstain on some data points
         self.sampled_indices = indices
         self.sampled_labels = labels
-        clf = get_revision_model(self.revision_model_class, seed=self.seed)
+
         X_sampled = self.get_feature(self.train_data)[indices, :]
         y_sampled = labels
-        if clf is not None:
-            clf.fit(X_sampled, y_sampled)
-            self.clf = clf
+        training_dataset = TensorDataset(torch.tensor(X_sampled), torch.tensor(y_sampled))
+        if self.valid_data is not None:
+            X_eval = self.get_feature(self.valid_data)
+            y_eval = self.valid_data.labels
+            eval_dataset = TensorDataset(torch.tensor(X_eval), torch.tensor(y_eval))
+        else:
+            eval_dataset = None
+        if self.trainer is not None:
+            self.trainer.train_model_with_dataloader(training_dataset, eval_dataset)
+        if self.revision_model_type == "mlp-temp":
+            self.trainer.model.temp_scale(eval_dataset)
 
     def predict_labels(self, dataset_type, cost):
         """

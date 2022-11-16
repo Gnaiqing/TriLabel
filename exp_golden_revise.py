@@ -3,7 +3,7 @@ Evaluate the classifier accuracy when revising LF by training classifiers with a
 """
 import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
-from reviser.relief import LFReviser
+from reviser.reviser import LFReviser
 import numpy as np
 import pandas as pd
 from pytorch_lightning import seed_everything

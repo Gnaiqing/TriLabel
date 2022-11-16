@@ -3,7 +3,7 @@ import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from wrench.dataset import get_dataset_type
 from labeller.labeller import get_labeller
-from reviser.relief import LFReviser
+from reviser.reviser import LFReviser
 from pathlib import Path
 from torch.utils.data import TensorDataset
 import torch
@@ -109,7 +109,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     label_model = get_label_model(args.label_model)
     label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
     encoder = None
-    reviser = LFReviser(train_data, encoder, args.revision_model_class,
+    reviser = LFReviser(train_data, encoder, args.revision_model,
                         valid_data=valid_data, seed=seed
                         )
 
@@ -174,7 +174,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda:1")
+    parser.add_argument("--device", type=str, default="cuda:0")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
@@ -191,13 +191,13 @@ if __name__ == "__main__":
     parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # revision model
-    parser.add_argument("--revision_model_class", type=str, default="mlp")
+    parser.add_argument("--revision_model", type=str, default="mlp")
     parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post", "all"])
     parser.add_argument("--revise_LF_method", type=str, default="correct", choices=["correct", "mute"])
     # label model and end models
-    parser.add_argument("--label_model", type=str, default="mv")
-    parser.add_argument("--end_model", type=str, default="roberta")
-    parser.add_argument("--em_epochs", type=int, default=5)
+    parser.add_argument("--label_model", type=str, default="metal")
+    parser.add_argument("--end_model", type=str, default="mlp")
+    parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
     parser.add_argument("--use_valid_labels", action="store_true")
