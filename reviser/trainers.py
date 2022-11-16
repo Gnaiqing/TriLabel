@@ -6,7 +6,7 @@ class NeuralNetworkTrainer:
     def __init__(self, model,
                  num_training_iterations=1000,
                  lr=1e-2,
-                 batch_size=64):
+                 batch_size=256):
         self.model = model.train()
         self.which_loss = None
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
@@ -23,7 +23,7 @@ class NeuralNetworkTrainer:
             raise NotImplementedError("Loss choice not valid or Loss not implemented!")
         return loss
 
-    def train_model(self, x_data, y_data, which_loss='cross-entropy'):
+    def train_model(self, x_data, y_data, which_loss='cross-entropy', device="cpu"):
         """
         :param x_data: (self.num_data_samples x 1): torch tensor containing input features.
         :param y_data: (self.num_data_samples): torch tensor containing output pairs.
@@ -31,7 +31,8 @@ class NeuralNetworkTrainer:
         :return: model: trained model
         """
         self.which_loss = which_loss
-
+        x_data = x_data.to(device)
+        y_data = y_data.to(device)
         for i in range(self.num_iterations):
             self.optimizer.zero_grad()
             network_output = self.model(x_data)
@@ -52,6 +53,7 @@ class NeuralNetworkTrainer:
                                     which_loss='cross-entropy',
                                     device='cpu'):
         self.which_loss = which_loss
+        self.model = self.model.to(device)
         # Validation Initialization
         if eval_dataset is not None:
             x_val, y_val = (

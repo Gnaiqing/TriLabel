@@ -2,11 +2,9 @@ import os
 
 dataset_list = [
     "youtube",
-    "trec",
-    "imdb",
-    "yelp",
-    "census",
-    "semeval"
+    # "trec",
+    # "census",
+    # "yelp",
 ]
 
 label_model_list = [
@@ -14,15 +12,33 @@ label_model_list = [
     "metal"
 ]
 
-revision_model_list = [
-    "mlp",
-    "expert-label"
+end_model_list = [
+    "mlp"
 ]
+
+sampler_list = [
+    "passive"
+]
+
+revision_model_list = [
+    "expert-label",
+    "mlp",
+    "mlp-temp",
+    "dropout"
+]
+
+tag = "00"
 
 for dataset in dataset_list:
     for lm in label_model_list:
-        for rm in revision_model_list:
-            cmd = f"python main_rlf.py --dataset {dataset} --label_model {lm} --end_model mlp --em_epochs 100" \
-                  f" --revision_model_class {rm} --use_valid_labels --repeats 20 --tag 2"
-            print(cmd)
-            os.system(cmd)
+        for em in end_model_list:
+            for sampler in sampler_list:
+                for rm in revision_model_list:
+                    if em == "mlp":
+                        n_epochs = 100
+                    else:
+                        n_epochs = 5
+                    cmd = f"python main_rlf.py --dataset {dataset} --label_model {lm} --end_model {em} --em_epochs {n_epochs}" \
+                          f" --sampler {sampler} --revision_model {rm} --use_valid_labels --repeats 20 --tag {tag}"
+                    print(cmd)
+                    os.system(cmd)

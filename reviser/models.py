@@ -47,12 +47,12 @@ class BaseNetwork(torch.nn.Module):
         raise NotImplementedError
 
     def predict(self, x):
-        f = self.inference_forward(torch.tensor(x))
+        f = self.inference_forward(x)
         y_pred = np.argmax(f, axis=1)
         return y_pred
 
     def predict_proba(self, x):
-        f = self.inference_forward(torch.tensor(x))
+        f = self.inference_forward(x)
         proba = softmax(f, axis=1)
         return proba
 
@@ -94,12 +94,14 @@ class MLPTempNet(MLPNet):
         super(MLPTempNet, self).__init__(n_neurons, activation, input_dim, output_dim)
         self.temp = 1
 
-    def temp_scale(self, eval_dataset):
+    def temp_scale(self, eval_dataset, device="cpu"):
         self.eval()
         if eval_dataset is None:
             return
 
         x_val, y_val = eval_dataset.tensors
+        x_val = x_val.to(device)
+        y_val = y_val.to(device)
         min_loss = 1e6
         with torch.no_grad():
             f = self.forward(x_val)

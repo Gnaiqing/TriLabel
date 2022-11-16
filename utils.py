@@ -442,19 +442,20 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     ax.plot(x, y, label="Test set accuracy (EM)", c="g")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
 
-    # if not np.isnan(res["rm_coverage"]).all():
-    #     y = res["rm_coverage"].mean(axis=0)
-    #     y_stderr = res["rm_coverage"].std(axis=0) / np.sqrt(n_run)
-    #     ax.plot(x, y, label="Revision model coverage", c="orange")
-    #     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="orange")
-    #
-    #     y = res["rm_covered_acc"].mean(axis=0)
-    #     y_stderr = res["rm_covered_acc"].std(axis=0) / np.sqrt(n_run)
-    #     ax.plot(x, y, label="Revision model accuracy", c="cyan")
-    #     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="cyan")
+    if not np.isnan(res["rm_coverage"]).all():
+        y = res["rm_coverage"].mean(axis=0)
+        y_stderr = res["rm_coverage"].std(axis=0) / np.sqrt(n_run)
+        ax.plot(x, y, label="Revision model coverage", c="orange")
+        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="orange")
+
+        y = res["rm_covered_acc"].mean(axis=0)
+        y_stderr = res["rm_covered_acc"].std(axis=0) / np.sqrt(n_run)
+        ax.plot(x, y, label="Revision model accuracy", c="cyan")
+        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="cyan")
 
     ax.set_xlabel("label budget")
     ax.set_title(title)
+    ax.set_ylim(0, 1)
     ax.legend()
     dirname = Path(figure_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)

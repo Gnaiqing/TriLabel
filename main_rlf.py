@@ -110,7 +110,9 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
     encoder = None
     reviser = LFReviser(train_data, encoder, args.revision_model,
-                        valid_data=valid_data, seed=seed
+                        device=args.device,
+                        valid_data=valid_data,
+                        seed=seed
                         )
 
     sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser.clf, encoder)
@@ -135,6 +137,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             raise NotImplementedError()
 
         cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
+        print(f"Set cost to {cost:.2f}")
         # train revision model
         reviser.train_revision_model(indices, labels)
         y_hat_train = reviser.predict_labels("train", cost)

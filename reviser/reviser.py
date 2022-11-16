@@ -13,6 +13,7 @@ class LFReviser:
                  train_data,
                  encoder,
                  revision_model,
+                 device="cpu",
                  valid_data=None,
                  seed=None):
         """
@@ -29,6 +30,7 @@ class LFReviser:
         self.encoder = encoder
         self.train_rep = self.get_feature(self.train_data)
         self.revision_model_type = revision_model
+        self.device = device
         if self.revision_model_type == "mlp":
             self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
             self.trainer = NeuralNetworkTrainer(self.clf)
@@ -74,9 +76,9 @@ class LFReviser:
         else:
             eval_dataset = None
         if self.trainer is not None:
-            self.trainer.train_model_with_dataloader(training_dataset, eval_dataset)
+            self.trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
         if self.revision_model_type == "mlp-temp":
-            self.trainer.model.temp_scale(eval_dataset)
+            self.trainer.model.temp_scale(eval_dataset, device=self.device)
 
     def predict_labels(self, dataset_type, cost):
         """
@@ -90,8 +92,8 @@ class LFReviser:
             raise ValueError(f"dataset type {dataset_type} not supported.")
 
         clf = self.clf
-        X = self.get_feature(dataset)
         if clf is not None:
+            X = torch.tensor(self.get_feature(dataset)).to(self.device)
             threshold = 1 - cost  # optimal threshold based on Chow's rule
             y_pred = clf.predict(X)
             y_probs = clf.predict_proba(X).max(axis=1)
@@ -113,7 +115,7 @@ class LFReviser:
         else:
             raise ValueError(f"dataset type {dataset_type} not supported.")
 
-        X = self.get_feature(dataset)
+        X = torch.tensor(self.get_feature(dataset)).to(self.device)
         probs = self.clf.predict_proba(X)
         return probs
 
