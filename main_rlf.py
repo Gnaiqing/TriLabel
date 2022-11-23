@@ -251,7 +251,7 @@ if __name__ == "__main__":
         results_list.append(results)
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model_class}_{args.tag}.json")
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}_{args.tag}.json")
     plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model_class}_{args.tag}.jpg",
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}_{args.tag}",
                  plot_labeled_frac)

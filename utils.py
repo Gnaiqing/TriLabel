@@ -405,7 +405,7 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     """
     # first plot LM's coverage and covered accuracy on train set
     n_run = len(results_list)
-    fig, ax = plt.subplots()
+
     res = {
         "train_coverage": [],
         "train_covered_acc": [],
@@ -426,6 +426,7 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     else:
         x = results_list[0]["n_labeled"]
 
+    fig, ax = plt.subplots()
     y = res["train_coverage"].mean(axis=0)
     y_stderr = res["train_coverage"].std(axis=0) / np.sqrt(n_run)
     ax.plot(x, y, label="Train label coverage", c="b")
@@ -436,28 +437,83 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     ax.plot(x, y, label="Train label accuracy", c="r")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
 
-    ax.axhline(y=res["em_test_golden"].mean(), color='k', linestyle='--')
-    y = res["em_test"].mean(axis=0)
-    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="Test set accuracy (EM)", c="g")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
-
     if not np.isnan(res["rm_coverage"]).all():
-        y = res["rm_coverage"].mean(axis=0)
-        y_stderr = res["rm_coverage"].std(axis=0) / np.sqrt(n_run)
+        y = np.nanmean(res["rm_coverage"], axis=0)
+        y_stderr = np.nanstd(res["rm_coverage"], axis=0) / np.sqrt(n_run)
         ax.plot(x, y, label="Revision model coverage", c="orange")
         ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="orange")
 
-        y = res["rm_covered_acc"].mean(axis=0)
-        y_stderr = res["rm_covered_acc"].std(axis=0) / np.sqrt(n_run)
+        y = np.nanmean(res["rm_covered_acc"], axis=0)
+        y_stderr = np.nanstd(res["rm_covered_acc"], axis=0) / np.sqrt(n_run)
         ax.plot(x, y, label="Revision model accuracy", c="cyan")
         ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="cyan")
 
     ax.set_xlabel("label budget")
-    ax.set_title(title)
-    ax.set_ylim(0, 1)
+    ax.set_title(title + "_train")
     ax.legend()
     dirname = Path(figure_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)
-    filename = os.path.join(dirname, filename)
-    fig.savefig(filename)
+    train_fig_path = os.path.join(dirname, filename + "_train.jpg")
+    fig.savefig(train_fig_path)
+
+    fig2, ax2 = plt.subplots()
+    ax2.axhline(y=res["em_test_golden"].mean(), color='k', linestyle='--')
+    y = res["em_test"].mean(axis=0)
+    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
+    ax2.plot(x, y, label="Test set accuracy (EM)", c="g")
+    ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
+    ax2.set_xlabel("label budget")
+    ax2.set_title(title + "_test")
+    ax2.legend()
+    test_fig_path = os.path.join(dirname, filename + "_test.jpg")
+    fig2.savefig(test_fig_path)
+
+
+def compare_em_performance(figure_path, dataset, label_model, end_model, methods, tag, plot_labeled_frac=False):
+    res = {}
+    golden_res = 0
+    for method in methods:
+        filepath = Path(figure_path) / dataset / f"{label_model}-{end_model}-{method}_{tag}.json"
+        infile = open(filepath, "r")
+        results = json.load(infile)
+        results_list =results["data"]
+        n_run = len(results_list)
+        em_test = []
+        em_test_golden = []
+        for i in range(n_run):
+            em_test.append(results_list[i]["em_test"])
+            em_test_golden.append(results_list[i]["em_test_golden"])
+
+        res[method] = np.array(em_test)
+        golden_res = np.array(em_test_golden).mean()
+        if plot_labeled_frac:
+            x = results_list[0]["frac_labeled"]
+        else:
+            x = results_list[0]["n_labeled"]
+
+    fig, ax = plt.subplots()
+    color_map = {
+        0: "red",
+        1: "green",
+        2: "yellow",
+        3: "blue",
+        4: "cyan",
+        5: "purple",
+        6: "orange",
+        7: "lime",
+        8: "violet"
+    }
+    i = 0
+    for method in res:
+        y = res[method].mean(axis=0)
+        y_stderr = res[method].std(axis=0) / np.sqrt(n_run)
+        ax.plot(x, y, label=method, color=color_map[i])
+        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color=color_map[i])
+        i += 1
+
+    ax.axhline(y=golden_res, color='k', linestyle='--')
+    ax.set_xlabel("label budget")
+    ax.set_title(f"{label_model}-{end_model}_testAcc")
+    ax.legend()
+    fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_testAcc.jpg"
+    fig.savefig(fig_path)

@@ -34,6 +34,19 @@ class LFReviser:
         if self.revision_model_type == "mlp":
             self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
             self.trainer = NeuralNetworkTrainer(self.clf)
+        elif self.revision_model_type == "ensemble":
+            self.clf_list = []
+            self.trainer_list = []
+            M = 10
+            np.random.seed(seed)
+            model_seeds = np.random.randint(1,100000, M)
+            for i in range(M):
+                torch.manual_seed(model_seeds[i])
+                clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
+                trainer = NeuralNetworkTrainer(clf)
+                self.clf_list.append(clf)
+                self.trainer_list.append(trainer)
+
         elif self.revision_model_type == "mlp-temp":
             self.clf = MLPTempNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
             self.trainer = NeuralNetworkTrainer(self.clf)
@@ -75,8 +88,13 @@ class LFReviser:
             eval_dataset = TensorDataset(torch.tensor(X_eval), torch.tensor(y_eval))
         else:
             eval_dataset = None
-        if self.trainer is not None:
+
+        if self.revision_model_type == "ensemble":
+            for trainer in self.trainer_list:
+                trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
+        elif self.trainer is not None:
             self.trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
+
         if self.revision_model_type == "mlp-temp":
             self.trainer.model.temp_scale(eval_dataset, device=self.device)
 
@@ -91,12 +109,17 @@ class LFReviser:
         else:
             raise ValueError(f"dataset type {dataset_type} not supported.")
 
-        clf = self.clf
-        if clf is not None:
+        if self.revision_model_type == "ensemble":
+            threshold = 1 - cost  # optimal threshold based on Chow's rule
+            y_probs = self.predict_proba(dataset_type)
+            y_pred = y_probs.argmax(axis=1)
+            y_probs = y_probs.max(axis=1)
+            y_pred[y_probs < threshold] = ABSTAIN
+        elif self.revision_model_type != "expert-label":
             X = torch.tensor(self.get_feature(dataset)).to(self.device)
             threshold = 1 - cost  # optimal threshold based on Chow's rule
-            y_pred = clf.predict(X)
-            y_probs = clf.predict_proba(X).max(axis=1)
+            y_pred = self.clf.predict(X)
+            y_probs = self.clf.predict_proba(X).max(axis=1)
             y_pred[y_probs < threshold] = ABSTAIN
         else:
             # use expert labels only
@@ -107,7 +130,6 @@ class LFReviser:
         return y_pred
 
     def predict_proba(self, dataset_type):
-        assert self.clf is not None
         if dataset_type == "train":
             dataset = self.train_data
         elif dataset_type == "valid":
@@ -116,7 +138,17 @@ class LFReviser:
             raise ValueError(f"dataset type {dataset_type} not supported.")
 
         X = torch.tensor(self.get_feature(dataset)).to(self.device)
-        probs = self.clf.predict_proba(X)
+        if self.revision_model_type == "ensemble":
+            probs_list = []
+            for clf in self.clf_list:
+                probs = clf.predict_proba(X)
+                probs_list.append(probs)
+
+            probs = np.concatenate(probs_list).mean(axis=0)
+        else:
+            assert self.clf is not None
+            probs = self.clf.predict_proba(X)
+
         return probs
 
     def get_revised_dataset(self, dataset_type, y_pred, revise_LF_method):

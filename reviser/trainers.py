@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 class NeuralNetworkTrainer:
@@ -14,6 +15,7 @@ class NeuralNetworkTrainer:
         self.batch_size = batch_size
         # Early stopping to avoid overfitting
         self.early_stopping_patience = None
+        # self.id = np.random.randint(1,1000000)
 
     def compute_loss(self, network_output, y_data, which_loss):
         if which_loss == 'cross-entropy':
@@ -73,7 +75,7 @@ class NeuralNetworkTrainer:
 
         best_val_loss = np.inf
         patience_counter = 0.0
-        self.early_stopping_patience = 100 * len(training_dataloader)  # 100 epochs
+        self.early_stopping_patience = 50 * len(training_dataloader)  # 50 epochs
         for i in range(self.num_iterations):
             try:
                 # Samples the batch
@@ -109,13 +111,43 @@ class NeuralNetworkTrainer:
                 else:
                     patience_counter = 0
                     best_val_loss = val_loss
-                    torch.save(self.model.state_dict(), "state_dict_model.pt")
+                    # torch.save(self.model.state_dict(), f"state_dict_model_{self.id}.pt")
 
             if patience_counter >= self.early_stopping_patience:
-                self.model.load_state_dict(torch.load("state_dict_model.pt"))
+                # self.model.load_state_dict(torch.load(f"state_dict_model_{self.id}.pt"))
                 return self.model
 
             self.optimizer.step()
 
-        self.model.load_state_dict(torch.load("state_dict_model.pt"))
+        # self.model.load_state_dict(torch.load(f"state_dict_model_{self.id}.pt"))
         return self.model
+
+
+class CostSensitiveNetworkTrainer(NeuralNetworkTrainer):
+    def __init__(self, model,
+                 cost,
+                 num_training_iterations=1000,
+                 lr=1e-2,
+                 batch_size=256,
+                 ):
+        super(CostSensitiveNetworkTrainer, self).__init__(model, num_training_iterations, lr, batch_size)
+        self.cost = cost
+
+    def compute_loss(self, network_output, y_data, which_loss):
+        if which_loss == "cross-entropy":
+            loss_func = torch.nn.CrossEntropyLoss()
+            loss = loss_func(network_output, y_data)
+        elif which_loss == "cs-sigmoid":
+            phi = F.sigmoid(network_output)
+            phi_neg = F.sigmoid(-network_output)
+            phi_y = torch.gather(phi, 1, y_data)
+            phi_neg_y = torch.gather(phi_neg, 1, y_data)
+            loss = self.cost * phi_y + (1-self.cost) * (torch.sum(phi_neg, dim=1) - phi_neg_y)
+            loss = loss.mean()
+        else:
+            raise NotImplementedError("Loss choice not valid or Loss not implemented!")
+        return loss
+
+
+
+
