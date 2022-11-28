@@ -25,7 +25,8 @@ def load_real_dataset(dataset_path, dataset, extract_fn):
         train_data, valid_data, test_data = load_dataset(
             dataset_path,
             dataset,
-            extract_feature=True
+            extract_feature=True,
+            normalize=True
         )
     else:
         raise ValueError(f"Extract_fn {extract_fn} not supported.")

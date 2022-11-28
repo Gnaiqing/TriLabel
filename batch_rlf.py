@@ -5,9 +5,33 @@ dataset_list = [
     # "trec",
     # "census",
     # "yelp",
+    # "basketball",
+    # "tennis",
+    "spambase",
+    "mushroom",
+    "bank-marketing",
+    "PhishingWebsites",
+    "Bioresponse"
+]
+
+text_datasets = [
+    "youtube",
+    "trec",
+    "yelp"
+]
+
+tabular_datasets = [
+    "census",
+    "spambase",
+    "mushroom",
+    "bank-marketing",
+    "PhishingWebsites",
+    "Bioresponse"
+]
+
+image_datasets = [
     "basketball",
-    "tennis",
-    "commercial"
+    "tennis"
 ]
 
 label_model_list = [
@@ -31,6 +55,7 @@ revision_model_list = [
 ]
 
 tag = "00"
+device = "cuda:1"
 repeats = 10
 debug_mode = False
 
@@ -43,8 +68,13 @@ for dataset in dataset_list:
                         n_epochs = 100
                     else:
                         n_epochs = 5
-                    cmd = f"python main_rlf.py --dataset {dataset} --label_model {lm} --end_model {em} --em_epochs {n_epochs}" \
-                          f" --sampler {sampler} --revision_model {rm} --use_valid_labels --repeats {repeats} --tag {tag}"
+                    if dataset in text_datasets:
+                        ext = " --extract_fn bert"
+                    else:
+                        ext = ""
+                    cmd = f"python main_rlf.py --device {device} --dataset {dataset} {ext} --label_model {lm} " \
+                          f"--end_model {em} --em_epochs {n_epochs} --sampler {sampler} --revision_model {rm} " \
+                          f"--use_valid_labels --repeats {repeats} --tag {tag}"
                     print(cmd)
                     os.system(cmd)
                     if debug_mode:

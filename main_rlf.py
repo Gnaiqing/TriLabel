@@ -181,7 +181,7 @@ if __name__ == "__main__":
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
-    parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
+    parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # contrastive learning
     parser.add_argument("--contrastive_mode", type=str, default=None)
     parser.add_argument("--data_augment", type=str, default="eda")
