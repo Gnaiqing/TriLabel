@@ -37,6 +37,9 @@ class MLPTempReviser(BaseReviser):
         return y_pred
 
     def predict_proba(self, dataset):
+        if self.clf is None:
+            return None
+
         X = torch.tensor(self.get_feature(dataset)).to(self.device)
         proba = self.clf.predict_proba(X)
         return proba

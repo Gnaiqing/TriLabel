@@ -44,6 +44,9 @@ class EnsembleReviser(BaseReviser):
         return y_pred
 
     def predict_proba(self, dataset):
+        if self.clf is None:
+            return None
+
         X = torch.tensor(self.get_feature(dataset)).to(self.device)
         M = len(self.clf)
         proba_list = []
@@ -51,7 +54,8 @@ class EnsembleReviser(BaseReviser):
             proba = self.clf[i].predict_proba(X)
             proba_list.append(proba)
 
-        proba = np.concatenate(proba_list).mean(axis=0)
+        proba = np.stack(proba_list, axis=0)
+        proba = proba.mean(axis=0)
         return proba
 
 

@@ -12,22 +12,27 @@ class DALSampler(BaseSampler):
         y_l = np.zeros((labeled_rep.shape[0],1), dtype=int)
         y_u = np.ones((unlabeled_rep.shape[0],1), dtype=int)
         X_train = np.vstack((labeled_rep, unlabeled_rep))
-        Y_train = np.vstack((y_l, y_u))
+        Y_train = np.vstack((y_l, y_u)).ravel()
         discriminator.fit(X_train,Y_train)
         return discriminator
 
     def sample_distinct(self, n=1):
         labeled_indices = np.nonzero(self.sampled != 0)[0]
         unlabeled_indices = np.nonzero(~self.sampled)[0]
-        if len(unlabeled_indices) > len(labeled_indices) * 10:
-            # subsampling to reduce class imbalance
-            unlabeled_indices = np.random.choice(unlabeled_indices, len(labeled_indices)*10, replace=False)
+        if len(labeled_indices) == 0:
+            # do random sampling in first iteration
+            order = np.random.permutation(len(self.candidate_indices))
+        else:
+            if len(unlabeled_indices) > len(labeled_indices) * 10:
+                # subsampling to reduce class imbalance
+                unlabeled_indices = np.random.choice(unlabeled_indices, len(labeled_indices)*10, replace=False)
 
-        labeled_rep = self.rep[labeled_indices,:]
-        unlabeled_rep = self.rep[unlabeled_indices, :]
-        discriminator = self.train_discriminative_model(labeled_rep, unlabeled_rep)
-        unlabeled_prob = discriminator.predict_proba(self.rep)[self.candidate_indices, 1]
-        order = np.argsort(unlabeled_prob)[::-1]
+            labeled_rep = self.rep[labeled_indices,:]
+            unlabeled_rep = self.rep[unlabeled_indices, :]
+            discriminator = self.train_discriminative_model(labeled_rep, unlabeled_rep)
+            unlabeled_prob = discriminator.predict_proba(self.rep)[self.candidate_indices, 1]
+            order = np.argsort(unlabeled_prob)[::-1]
+
         n_sampled, i, indices = 0, 0, []
         while n_sampled < n:
             idx = self.candidate_indices[order[i]]

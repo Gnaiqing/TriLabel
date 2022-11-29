@@ -154,9 +154,9 @@ def get_sampler(sampler_type, train_data, labeller, label_model, revision_model,
         return PassiveSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "uncertain":
         return UncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
-    elif sampler_type == "rm-uncertain":
+    elif sampler_type == "uncertain-rm":
         return RmUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
-    elif sampler_type == "DAL":
+    elif sampler_type == "dal":
         return DALSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "abstain":
         return AbstainSampler(train_data, labeller, label_model, revision_model, encoder)
@@ -169,6 +169,27 @@ def get_sampler(sampler_type, train_data, labeller, label_model, revision_model,
             return MaxKLSampler(train_data, labeller, kwargs["label_model"])
     else:
         raise ValueError(f"sampler {sampler_type} not implemented.")
+
+
+def get_reviser(reviser_type, train_data, valid_data, encoder,  device, seed):
+    from reviser import CostSensitiveReviser, EnsembleReviser, ExpertLabelReviser, MCDropoutReviser, \
+        MLPReviser, MLPTempReviser
+    if reviser_type == "mlp":
+        return MLPReviser(train_data, encoder, device, valid_data, seed)
+    elif reviser_type == "mlp-temp":
+        return MLPTempReviser(train_data, encoder, device, valid_data, seed)
+    elif reviser_type == "cs-hinge":
+        return CostSensitiveReviser(train_data, encoder, device, valid_data, seed, loss="cs-hinge")
+    elif reviser_type == "cs-sigmoid":
+        return CostSensitiveReviser(train_data, encoder, device, valid_data, seed, loss="cs-sigmoid")
+    elif reviser_type == "ensemble":
+        return EnsembleReviser(train_data, encoder, device, valid_data, seed)
+    elif reviser_type == "expert-label":
+        return ExpertLabelReviser(train_data, encoder, device, valid_data, seed)
+    elif reviser_type == "mc-dropout":
+        return MCDropoutReviser(train_data, encoder, device, valid_data, seed)
+    else:
+        raise ValueError(f"reviser {reviser_type} not implemented.")
 
 
 def score(y_true, y_pred, metric):
@@ -469,27 +490,30 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     fig2.savefig(test_fig_path)
 
 
-def compare_em_performance(figure_path, dataset, label_model, end_model, methods, tag, plot_labeled_frac=False):
+def compare_em_performance(figure_path, dataset, label_model, end_model, revision_model_list, sampler_list,
+                           tag, plot_labeled_frac=False):
     res = {}
     golden_res = 0
-    for method in methods:
-        filepath = Path(figure_path) / dataset / f"{label_model}-{end_model}-{method}_{tag}.json"
-        infile = open(filepath, "r")
-        results = json.load(infile)
-        results_list =results["data"]
-        n_run = len(results_list)
-        em_test = []
-        em_test_golden = []
-        for i in range(n_run):
-            em_test.append(results_list[i]["em_test"])
-            em_test_golden.append(results_list[i]["em_test_golden"])
+    for rm in revision_model_list:
+        for sampler in sampler_list:
+            method = f"{rm}_{sampler}"
+            filepath = Path(figure_path) / dataset / f"{label_model}-{end_model}-{rm}-{sampler}_{tag}.json"
+            infile = open(filepath, "r")
+            results = json.load(infile)
+            results_list =results["data"]
+            n_run = len(results_list)
+            em_test = []
+            em_test_golden = []
+            for i in range(n_run):
+                em_test.append(results_list[i]["em_test"])
+                em_test_golden.append(results_list[i]["em_test_golden"])
 
-        res[method] = np.array(em_test)
-        golden_res = np.array(em_test_golden).mean()
-        if plot_labeled_frac:
-            x = results_list[0]["frac_labeled"]
-        else:
-            x = results_list[0]["n_labeled"]
+            res[method] = np.array(em_test)
+            golden_res = np.array(em_test_golden).mean()
+            if plot_labeled_frac:
+                x = results_list[0]["frac_labeled"]
+            else:
+                x = results_list[0]["n_labeled"]
 
     fig, ax = plt.subplots()
     color_map = {
@@ -509,11 +533,11 @@ def compare_em_performance(figure_path, dataset, label_model, end_model, methods
         y_stderr = res[method].std(axis=0) / np.sqrt(n_run)
         ax.plot(x, y, label=method, color=color_map[i])
         ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color=color_map[i])
-        i += 1
+        i = (i+1) % len(color_map)
 
     ax.axhline(y=golden_res, color='k', linestyle='--')
     ax.set_xlabel("label budget")
-    ax.set_title(f"{label_model}-{end_model}_testAcc")
+    ax.set_title(f"{dataset}-{label_model}-{end_model}_testAcc")
     ax.legend()
     fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_testAcc.jpg"
     fig.savefig(fig_path)

@@ -10,6 +10,16 @@ from torch.utils.data import TensorDataset
 
 
 class CostSensitiveReviser(BaseReviser):
+    def __init__(self,
+                 train_data,
+                 encoder,
+                 device="cpu",
+                 valid_data=None,
+                 seed=None,
+                 loss="cs-hinge"):
+        super(CostSensitiveReviser, self).__init__(train_data, encoder, device, valid_data, seed)
+        self.loss_type = loss
+
     def train_revision_model(self, indices, labels, cost):
         self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
         trainer = CostSensitiveNetworkTrainer(self.clf, cost)
@@ -23,7 +33,7 @@ class CostSensitiveReviser(BaseReviser):
         else:
             eval_dataset = None
 
-        trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
+        trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device, which_loss=self.loss_type)
 
     def predict_labels(self, dataset, cost):
         X = torch.tensor(self.get_feature(dataset)).to(self.device)

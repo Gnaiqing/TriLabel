@@ -8,10 +8,10 @@ dataset_list = [
     # "basketball",
     # "tennis",
     "spambase",
-    "mushroom",
-    "bank-marketing",
-    "PhishingWebsites",
-    "Bioresponse"
+    # "mushroom",
+    # "bank-marketing",
+    # "PhishingWebsites",
+    # "Bioresponse"
 ]
 
 text_datasets = [
@@ -44,17 +44,25 @@ end_model_list = [
 ]
 
 sampler_list = [
-    "passive"
+    "passive",
+    "uncertain",
+    "uncertain-rm",
+    "dal",
+    "abstain",
+    "disagreement"
 ]
 
 revision_model_list = [
-    "expert-label",
-    "mlp",
-    "mlp-temp",
-    "dropout"
+    # "expert-label",
+    # "mlp",
+    # "mlp-temp",
+    # "dropout",
+    # "cs-hinge",
+    # "cs-sigmoid",
+    "ensemble"
 ]
 
-tag = "00"
+tag = "01"
 device = "cuda:1"
 repeats = 10
 debug_mode = False

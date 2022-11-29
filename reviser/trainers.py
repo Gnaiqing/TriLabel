@@ -138,11 +138,18 @@ class CostSensitiveNetworkTrainer(NeuralNetworkTrainer):
             loss_func = torch.nn.CrossEntropyLoss()
             loss = loss_func(network_output, y_data)
         elif which_loss == "cs-sigmoid":
-            phi = F.sigmoid(network_output)
-            phi_neg = F.sigmoid(-network_output)
-            phi_y = torch.gather(phi, 1, y_data)
-            phi_neg_y = torch.gather(phi_neg, 1, y_data)
-            loss = self.cost * phi_y + (1-self.cost) * (torch.sum(phi_neg, dim=1) - phi_neg_y)
+            phi = torch.sigmoid(-network_output)
+            phi_neg = torch.sigmoid(network_output)
+            phi_y = torch.gather(phi, 1, y_data.view(-1,1))
+            phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1,1))
+            loss = self.cost * phi_y + (1-self.cost) * (torch.sum(phi_neg, dim=1).view(-1,1) - phi_neg_y)
+            loss = loss.mean()
+        elif which_loss == "cs-hinge":
+            phi = torch.relu(1-network_output)
+            phi_neg = torch.relu(1+network_output)
+            phi_y = torch.gather(phi, 1, y_data.view(-1, 1))
+            phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1, 1))
+            loss = self.cost * phi_y + (1 - self.cost) * (torch.sum(phi_neg, dim=1).view(-1, 1) - phi_neg_y)
             loss = loss.mean()
         else:
             raise NotImplementedError("Loss choice not valid or Loss not implemented!")

@@ -3,7 +3,6 @@ import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from wrench.dataset import get_dataset_type
 from labeller.labeller import get_labeller
-from reviser.reviser import LFReviser
 from pathlib import Path
 from torch.utils.data import TensorDataset
 import torch
@@ -11,7 +10,8 @@ import json
 import numpy as np
 import pytorch_lightning as pl
 from contrastive.mlp import MLP
-from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, get_sampler, get_label_model
+from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, get_sampler, \
+    get_label_model, get_reviser
 from sklearn.metrics import accuracy_score
 import copy
 
@@ -109,16 +109,16 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     label_model = get_label_model(args.label_model)
     label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
     encoder = None
-    reviser = LFReviser(train_data, encoder, args.revision_model,
-                        device=args.device,
-                        valid_data=valid_data,
-                        seed=seed
-                        )
+    reviser = get_reviser(args.revision_model, train_data, valid_data, encoder, args.device, seed)
+    # reviser = LFReviser(train_data, encoder, args.revision_model,
+    #                     device=args.device,
+    #                     valid_data=valid_data,
+    #                     seed=seed
+    #                     )
 
-    sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser.clf, encoder)
+    sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser, encoder)
 
-    # initialize revised train data
-    revised_train_data = copy.copy(train_data)
+    # initialize revised valid data
     revised_valid_data = copy.copy(valid_data)
 
     if args.sample_budget < 1:
@@ -139,13 +139,12 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
         print(f"Set cost to {cost:.2f}")
         # train revision model
-        reviser.train_revision_model(indices, labels)
-        y_hat_train = reviser.predict_labels("train", cost)
-        y_hat_valid = reviser.predict_labels("valid", cost)
-        if args.revision_type in ["pre", "all"]:
+        reviser.train_revision_model(indices, labels, cost=cost)
+        y_hat_train = reviser.predict_labels(reviser.train_data, cost)
+        if args.revision_type == "pre":
             # revise label functions
-            revised_train_data = reviser.get_revised_dataset("train", y_hat_train, args.revise_LF_method)
-            revised_valid_data = reviser.get_revised_dataset("valid", y_hat_valid, args.revise_LF_method)
+            revised_train_data = reviser.get_revised_dataset("train", cost)
+            revised_valid_data = reviser.get_revised_dataset("valid", cost)
 
         perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args,
                                     rm_predict_labels=y_hat_train,
@@ -158,7 +157,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         label_model.fit(dataset_train=revised_train_data, dataset_valid=revised_valid_data)
         sampler.update_stats(revised_train_data,
                              label_model=label_model,
-                             revision_model=reviser.clf,
+                             revision_model=reviser,
                              encoder=encoder)
 
         if args.verbose:
@@ -195,7 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # revision model
     parser.add_argument("--revision_model", type=str, default="mlp")
-    parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post", "all"])
+    parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post"])
     parser.add_argument("--revise_LF_method", type=str, default="correct", choices=["correct", "mute"])
     # label model and end models
     parser.add_argument("--label_model", type=str, default="metal")
@@ -206,7 +205,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_valid_labels", action="store_true")
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="acc")
-    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
@@ -226,7 +225,7 @@ if __name__ == "__main__":
 
     if args.load_results:
         filepath = Path(args.output_path) / args.dataset / \
-                   f"{args.label_model}-{args.end_model}-{args.revision_model_class}_{args.tag}.json"
+                   f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}.json"
         readfile = open(filepath, "r")
         results = json.load(readfile)
         results_list = results["data"]
@@ -251,7 +250,7 @@ if __name__ == "__main__":
         results_list.append(results)
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}_{args.tag}.json")
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}.json")
     plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}_{args.tag}",
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}",
                  plot_labeled_frac)
