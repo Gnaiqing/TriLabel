@@ -3,10 +3,11 @@ import sys
 import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from labeller.labeller import get_labeller
+from pathlib import Path
 import json
 import numpy as np
-from utils import evaluate_performance, plot_tsne, plot_results, save_results, evaluate_golden_performance, get_sampler
-import copy
+from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, \
+    get_sampler, get_label_model
 from typing import Union
 from main_rlf import update_results
 
@@ -20,6 +21,8 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
         "frac_labeled": [],
         "train_coverage": [],
         "train_covered_acc": [],
+        "rm_coverage": [],
+        "rm_covered_acc": [],
         "em_test": [],
     }
     # record original stats
@@ -36,10 +39,17 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
         print("Test set acc: ", perf["em_test"])
         print("Golden test set acc: ", golden_perf["em_test"])
 
-    # set labeller, sampler, reviser and encoder
+    # get labeller, sampler, reviser and encoder
     labeller = get_labeller(args.labeller)
-    sampler = get_sampler(args.sampler, train_data, labeller, label_model=args.label_model,
-                          penalty_strength=args.penalty_strength)
+    label_model = get_label_model("aw", penalty_strength=args.penalty_strength)
+    if args.use_valid_labels:
+        label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
+    else:
+        label_model.fit(dataset_train=train_data)
+    sampler = get_sampler(args.sampler, train_data, labeller,
+                          label_model=label_model,
+                          revision_model=None,
+                          encoder=None)
     if args.sample_budget < 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
         args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
@@ -55,7 +65,8 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
         update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
-        sampler.update_dataset(train_data, ground_truth_labels)
+        sampler.label_model.fit(dataset_train=train_data, dataset_valid=valid_data,
+                                ground_truth_labels=ground_truth_labels)
         if args.verbose:
             print(f"Revised summary at {n_labeled}({frac_labeled * 100:.1f}%):")
             print("Train coverage: ", perf["train_coverage"])
@@ -71,17 +82,16 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:0")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
-    parser.add_argument("--dataset_path", type=str, default="../datasets/")
-    parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
+    parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
+    parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # sampler
     parser.add_argument("--sampler", type=str, default="maxkl")
-    parser.add_argument("--sample_budget", type=Union[int, float], default=0.10)  # Total sample budget
+    parser.add_argument("--sample_budget", type=Union[int, float], default=0.05)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=Union[int, float], default=0.01)  # sample budget per iteration
     # label model and end models
-    parser.add_argument("--label_model", type=str, default="aw")
-    parser.add_argument("--penalty_strength", type=float, default=1.0)
-    parser.add_argument("--end_model", type=str, default="roberta")
-    parser.add_argument("--em_epochs", type=int, default=5)
+    parser.add_argument("--penalty_strength", type=float, default=1000.0)
+    parser.add_argument("--end_model", type=str, default="mlp")
+    parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
     parser.add_argument("--use_valid_labels", action="store_true")
@@ -91,20 +101,26 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--tag", type=str, default="0")
-    parser.add_argument("--load_results", type=str, default=None)
+    parser.add_argument("--tag", type=str, default="test")
+    parser.add_argument("--load_results", action="store_true")
     args = parser.parse_args()
+    args.label_model = "aw"
+    args.revision_type = None  # for evaluation purpose
 
     if args.sample_budget < 1:
         plot_labeled_frac = True
     else:
         plot_labeled_frac = False
 
-    if args.load_results is not None:
+    if args.load_results:
+        filepath = Path(args.output_path) / args.dataset / \
+                   f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.json"
         readfile = open(args.load_results, "r")
         results = json.load(readfile)
         results_list = results["data"]
-        plot_results(results_list, args.output_path, args.dataset, f"{args.dataset}_{args.tag}", plot_labeled_frac)
+        plot_results(results_list, args.output_path, args.dataset, args.dataset,
+                     f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.jpg",
+                     plot_labeled_frac)
         sys.exit(0)
 
     if args.dataset[:3] == "syn":
@@ -122,9 +138,9 @@ if __name__ == "__main__":
         results_list.append(results)
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-aw_{args.tag}.json")
+                 f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.json")
     plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-aw_{args.tag}.jpg",
+                 f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.jpg",
                  plot_labeled_frac)
 
 

@@ -107,18 +107,16 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     # set labeller, sampler, label_model, reviser and encoder
     labeller = get_labeller(args.labeller)
     label_model = get_label_model(args.label_model)
-    label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
+    if args.use_valid_labels:
+        label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
+    else:
+        label_model.fit(dataset_train=train_data)
     encoder = None
     reviser = get_reviser(args.revision_model, train_data, valid_data, encoder, args.device, seed)
-    # reviser = LFReviser(train_data, encoder, args.revision_model,
-    #                     device=args.device,
-    #                     valid_data=valid_data,
-    #                     seed=seed
-    #                     )
-
     sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser, encoder)
 
-    # initialize revised valid data
+    # initialize revised train and valid data
+    revised_train_data = copy.copy(train_data)
     revised_valid_data = copy.copy(valid_data)
 
     if args.sample_budget < 1:
@@ -129,14 +127,16 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
-        # estimate current accuracy of label model using valid labels
+        # estimate current accuracy of label model using valid labels or sampled train labels
         if args.use_valid_labels:
             lm_pred = label_model.predict(revised_valid_data)
             lm_acc_hat = accuracy_score(revised_valid_data.labels, lm_pred)
         else:
-            raise NotImplementedError()
+            lm_pred = label_model.predict(revised_train_data)
+            lm_acc_hat = accuracy_score(labels, lm_pred[indices])
+
         if args.rejection_cost is None:
-            cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
+            cost = 1 - lm_acc_hat
         else:
             cost = args.rejection_cost
 
@@ -144,7 +144,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         # train revision model
         reviser.train_revision_model(indices, labels, cost=cost)
         y_hat_train = reviser.predict_labels(reviser.train_data, cost)
-        if args.revision_type == "pre":
+        if args.revision_type in ["LF", "both"]:
             # revise label functions
             revised_train_data = reviser.get_revised_dataset("train", cost)
             revised_valid_data = reviser.get_revised_dataset("valid", cost)
@@ -184,18 +184,17 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
-    # contrastive learning
+    # contrastive learning. If set to None, use original features.
     parser.add_argument("--contrastive_mode", type=str, default=None)
     # rejection cost. If set to None, use adaptive cost.
     parser.add_argument("--rejection_cost", type=float, default=None)
     # sampler
     parser.add_argument("--sampler", type=str, default="passive")
-    parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
+    parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # revision model
     parser.add_argument("--revision_model", type=str, default="mlp")
-    parser.add_argument("--revision_type", type=str, default="pre", choices=["pre", "post"])
-    parser.add_argument("--revise_LF_method", type=str, default="correct", choices=["correct", "mute"])
+    parser.add_argument("--revision_type", type=str, default="both", choices=["LF", "label", "both"])
     # label model and end models
     parser.add_argument("--label_model", type=str, default="metal")
     parser.add_argument("--end_model", type=str, default="mlp")
@@ -209,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--tag", type=str, default="0")
+    parser.add_argument("--tag", type=str, default="test")
     parser.add_argument("--load_results", action="store_true")
     # plot settings
     parser.add_argument("--plot_lf", action="store_true")  # plot LF accuracy and coverage over revision process

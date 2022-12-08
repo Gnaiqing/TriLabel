@@ -68,11 +68,12 @@ class LabelModel(PerformanceMixin):
             ]
         ) ** 2
 
-        if self.active_learning:
+        if self.active_learning and self.ground_truth_labels is not None:
             tmp_cov = self.calculate_cov_OS()
             tmp_mu = self.calculate_mu(tmp_cov)
             tmp_probs = self._predict(self.label_matrix, tmp_mu, self.E_S)
-            loss += self.loss_prior_knowledge_probs(tmp_probs)
+            loss2 = self.loss_prior_knowledge_probs(tmp_probs)
+            loss += loss2
 
         return loss
 

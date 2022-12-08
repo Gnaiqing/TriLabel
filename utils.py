@@ -2,11 +2,6 @@ import numpy as np
 from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, MeTaL
 from active_weasul.label_model import LabelModel
 from wrench.endmodel import EndClassifierModel, LogRegModel, Cosine
-from sklearn.linear_model import LogisticRegression, SGDClassifier
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neural_network import MLPClassifier
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.manifold import TSNE
 from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
@@ -17,59 +12,28 @@ from pytorch_lightning import seed_everything
 from pathlib import Path
 import os
 import json
-import torch
 
 ABSTAIN = -1
 
 
 def get_label_model(model_type, **kwargs):
     if model_type == "snorkel":
-        label_model = Snorkel(lr=0.001, l2=0.0, n_epochs=1000)
+        label_model = Snorkel(lr=0.01, l2=0.0, n_epochs=100)
     elif model_type == "ds":
         label_model = DawidSkene()
     elif model_type == "mv":
         label_model = MajorityVoting()
     elif model_type == "metal":
-        label_model = MeTaL(lr=0.001, n_epochs=1000)
+        label_model = MeTaL(lr=0.01, n_epochs=100)
     elif model_type == "aw":
         if "penalty_strength" in kwargs:
-            label_model = LabelModel(n_epochs=1000, lr=0.001, active_learning=False,
+            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=True,
                                      penalty_strength=kwargs["penalty_strength"])
         else:
-            label_model = LabelModel(n_epochs=1000, lr=0.001, active_learning=False)
+            label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=True)
     else:
         raise ValueError(f"label model {model_type} not supported.")
     return label_model
-
-
-def get_lf(lf_class, seed=None):
-    if lf_class == "logistic":
-        clf = LogisticRegression(random_state=seed, max_iter=500)
-    elif lf_class == "linear-svm":
-        clf = SVC(kernel="linear", probability=True, random_state=seed)
-    elif lf_class == "dt":
-        clf = DecisionTreeClassifier(random_state=seed)
-    else:
-        raise ValueError(f"LF Class {lf_class} not supported yet.")
-    return clf
-
-
-def get_revision_model(revision_model_class, seed=None):
-    if revision_model_class == "logistic":
-        clf = LogisticRegression(max_iter=500, random_state=seed)
-    elif revision_model_class == "linear-svm":
-        clf = SVC(kernel="linear", probability=True, random_state=seed)
-    elif revision_model_class == "decision-tree":
-        clf = DecisionTreeClassifier(random_state=seed)
-    elif revision_model_class == "random-forest":
-        clf = RandomForestClassifier(random_state=seed)
-    elif revision_model_class == "mlp":
-        clf = MLPClassifier(max_iter=500, learning_rate_init=0.01, random_state=seed)
-    elif revision_model_class == "expert-label":
-        clf = None
-    else:
-        raise ValueError(f"Revision model {revision_model_class} not supported yet.")
-    return clf
 
 
 def get_end_model(model_type):
@@ -147,7 +111,7 @@ def get_end_model(model_type):
     return end_model
 
 
-def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder, **kwargs):
+def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder):
     from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, \
         RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler
     if sampler_type == "passive":
@@ -163,10 +127,7 @@ def get_sampler(sampler_type, train_data, labeller, label_model, revision_model,
     elif sampler_type == "disagreement":
         return DisagreementSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "maxkl":
-        if "penalty_strength" in kwargs:
-            return MaxKLSampler(train_data, labeller, kwargs["label_model"], penalty_strength=kwargs["penalty_strength"])
-        else:
-            return MaxKLSampler(train_data, labeller, kwargs["label_model"])
+        return MaxKLSampler(train_data, labeller,label_model, revision_model, encoder)
     else:
         raise ValueError(f"sampler {sampler_type} not implemented.")
 
@@ -207,16 +168,12 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
     Evaluate the performance of weak supervision pipeline
     """
     seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    covered_train_data = train_data.get_covered_subset()
-
     if args.label_model == "aw":
         if hasattr(args, "penalty_strength"):
             label_model = get_label_model(args.label_model, penalty_strength=args.penalty_strength)
         else:
             label_model = get_label_model(args.label_model)
-        # active WeaSuL model use ground truth labels to tune parameters
-        if ground_truth_labels is not None:
-            label_model.active_learning = True
+
         if args.use_valid_labels:
             label_model.fit(dataset_train=train_data,
                             dataset_valid=valid_data,
@@ -230,50 +187,69 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
     else:
         label_model = get_label_model(args.label_model)
         if args.use_valid_labels:
-            label_model.fit(dataset_train=covered_train_data,
+            label_model.fit(dataset_train=train_data,
                             dataset_valid=valid_data,
                             y_valid=valid_data.labels)
         else:
-            # use majority voting to estimate valid labels
-            mv = get_label_model("mv")
-            mv.fit(dataset_train=covered_train_data)
-            covered_valid_data = valid_data.get_covered_subset()
-            pred_valid_labels = mv.predict(covered_valid_data)
-            label_model.fit(dataset_train=covered_train_data,
-                            dataset_valid=covered_valid_data,
-                            y_valid=pred_valid_labels)
+            label_model.fit(dataset_train=train_data)
 
-    if args.revision_type == "pre" or rm_predict_labels is None:
-        # use the predicted label of label model
-        train_coverage = len(covered_train_data) / len(train_data)
-        pred_train_labels = label_model.predict(covered_train_data)
-        train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
-        end_model = get_end_model(args.end_model)
-        if args.use_soft_labels:
-            aggregated_labels = label_model.predict_proba(covered_train_data)
-        else:
-            aggregated_labels = label_model.predict(covered_train_data)
+    aggregated_soft_labels = label_model.predict_proba(train_data)
+    aggregated_hard_labels = label_model.predict(train_data)
+
+    # get covered set
+    covered = np.any(np.array(train_data.weak_labels) != ABSTAIN, axis=1)
+    if args.revision_type in ["label", "both"] and rm_predict_labels is not None:
+        covered = covered | (rm_predict_labels != ABSTAIN)
+        rm_covered_pos = np.nonzero(rm_predict_labels != ABSTAIN)[0]
+        rm_covered_labels = rm_predict_labels[rm_covered_pos]
+        aggregated_soft_labels[rm_covered_pos, :] = 0.0
+        aggregated_soft_labels[rm_covered_pos, rm_covered_labels] = 1.0
+        aggregated_hard_labels[rm_covered_pos] = rm_covered_labels
+
+    covered_indices = np.nonzero(covered)[0]
+    covered_train_data = train_data.create_subset(covered_indices.tolist())
+    aggregated_soft_labels = aggregated_soft_labels[covered_indices,:]
+    aggregated_hard_labels = aggregated_hard_labels[covered_indices]
+    train_coverage = len(covered_train_data) / len(train_data)
+    train_covered_acc = accuracy_score(covered_train_data.labels, aggregated_hard_labels)
+    if args.use_soft_labels:
+        aggregated_labels = aggregated_soft_labels
     else:
-        # use labels predicted by revision model to correct labels predicted by LM
-        weak_labels = np.array(train_data.weak_labels)
-        covered_mask = np.any(weak_labels != ABSTAIN, axis=1)
-        pred_mask = rm_predict_labels != ABSTAIN
-        pred_indices = np.nonzero(pred_mask)[0]
-        covered_indices = np.nonzero(covered_mask | pred_mask)[0]
-        covered_train_data = train_data.create_subset(covered_indices)
-        _, pred_pos, covered_pos = np.intersect1d(pred_indices, covered_indices, return_indices=True)
-        pred_train_labels = label_model.predict(covered_train_data)
-        pred_train_labels[covered_pos] = rm_predict_labels[pred_mask]
-        train_coverage = len(covered_train_data) / len(train_data)
-        train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
-        end_model = get_end_model(args.end_model)
-        if args.use_soft_labels:
-            aggregated_labels = label_model.predict_proba(covered_train_data)
-            aggregated_labels[covered_pos, :] = 0.0
-            aggregated_labels[covered_pos, rm_predict_labels[pred_mask]] = 1.0
-        else:
-            aggregated_labels = pred_train_labels
+        aggregated_labels = aggregated_hard_labels
 
+    # if args.revision_type == "LF" or rm_predict_labels is None:
+    #     # use the predicted label of label model
+    #     train_coverage = len(covered_train_data) / len(train_data)
+    #     pred_train_labels = label_model.predict(covered_train_data)
+    #     # train_covered_acc is used to measure the quality of labels and will not be revealed to end model
+    #     train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
+    #     end_model = get_end_model(args.end_model)
+    #     if args.use_soft_labels:
+    #         aggregated_labels = label_model.predict_proba(covered_train_data)
+    #     else:
+    #         aggregated_labels = label_model.predict(covered_train_data)
+    # else:
+    #     # use labels predicted by revision model to correct labels predicted by LM
+    #     weak_labels = np.array(train_data.weak_labels)
+    #     covered_mask = np.any(weak_labels != ABSTAIN, axis=1)
+    #     pred_mask = rm_predict_labels != ABSTAIN
+    #     pred_indices = np.nonzero(pred_mask)[0]
+    #     covered_indices = np.nonzero(covered_mask | pred_mask)[0]
+    #     covered_train_data = train_data.create_subset(covered_indices)
+    #     _, pred_pos, covered_pos = np.intersect1d(pred_indices, covered_indices, return_indices=True)
+    #     pred_train_labels = label_model.predict(covered_train_data)
+    #     pred_train_labels[covered_pos] = rm_predict_labels[pred_mask]
+    #     train_coverage = len(covered_train_data) / len(train_data)
+    #     train_covered_acc = score(covered_train_data.labels, pred_train_labels, "acc")
+    #     end_model = get_end_model(args.end_model)
+    #     if args.use_soft_labels:
+    #         aggregated_labels = label_model.predict_proba(covered_train_data)
+    #         aggregated_labels[covered_pos, :] = 0.0
+    #         aggregated_labels[covered_pos, rm_predict_labels[pred_mask]] = 1.0
+    #     else:
+    #         aggregated_labels = pred_train_labels
+
+    end_model = get_end_model(args.end_model)
     n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
     evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
 
@@ -291,13 +267,9 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
         )
 
     else:
-        covered_valid_data = valid_data.get_covered_subset()
-        pred_valid_labels = label_model.predict(covered_valid_data)
         end_model.fit(
             dataset_train=covered_train_data,
             y_train=aggregated_labels,
-            dataset_valid=covered_valid_data,
-            y_valid=pred_valid_labels,
             metric=args.metric,
             device=args.device,
             verbose=True,
@@ -309,7 +281,9 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
     perf = {
         "train_coverage": train_coverage,
         "train_covered_acc": train_covered_acc,
-        "em_test": em_test
+        "em_test": em_test,
+        "rm_coverage": np.nan,
+        "rm_covered_acc": np.nan,
     }
     if rm_predict_labels is not None:
         # record the coverage and accuracy of RM predict labels
@@ -317,9 +291,6 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
         rm_accuracy = np.sum(rm_predict_labels == np.array(train_data.labels)) / np.sum(rm_predict_labels != ABSTAIN)
         perf["rm_coverage"] = rm_coverage
         perf["rm_covered_acc"] = rm_accuracy
-    else:
-        perf["rm_coverage"] = np.nan
-        perf["rm_covered_acc"] = np.nan
 
     return perf
 
@@ -394,28 +365,6 @@ def save_results(results_list, output_path, dataset, filename):
     Path(dirname).mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as write_file:
         json.dump({"data": results_list}, write_file, indent=4)
-
-
-def plot_LF_activation(dataset, lf_idx, figure_path, dataset_name, title,
-                       encoder=None, perplexity=5.0, pca_reduction=False):
-    """
-    Plot the region where an LF is activated. See where it makes correct/wrong predictions.
-    :param dataset: dataset to inspect
-    :param lf_idx: LF to inspect
-    :param title: title of plot
-    :return:
-    """
-    L = np.array(dataset.weak_labels)
-    active_mask = L[:, lf_idx] != ABSTAIN
-    if encoder is None:
-        features = dataset.features[active_mask, :]
-    else:
-        features = encoder(torch.tensor(dataset.features[active_mask, :])).detach().cpu().numpy()
-
-    labels = np.array(dataset.labels)[active_mask]
-    weak_labels = L[active_mask, lf_idx]
-    y = labels == weak_labels
-    plot_tsne(features, y, figure_path, dataset_name, title, perplexity=perplexity, pca_reduction=pca_reduction)
 
 
 def plot_results(results_list, figure_path, dataset, title, filename, plot_labeled_frac=False):
