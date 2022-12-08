@@ -135,8 +135,11 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             lm_acc_hat = accuracy_score(revised_valid_data.labels, lm_pred)
         else:
             raise NotImplementedError()
+        if args.rejection_cost is None:
+            cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
+        else:
+            cost = args.rejection_cost
 
-        cost = 1 - lm_acc_hat  # the higher accuracy for LM, the lower cost for RM to reject prediction
         print(f"Set cost to {cost:.2f}")
         # train revision model
         reviser.train_revision_model(indices, labels, cost=cost)
@@ -176,18 +179,15 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--device", type=str, default="cuda:1")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # contrastive learning
     parser.add_argument("--contrastive_mode", type=str, default=None)
-    parser.add_argument("--data_augment", type=str, default="eda")
-    parser.add_argument("--n_aug", type=int, default=2)
-    parser.add_argument("--dim_out", type=int, default=30)
-    parser.add_argument("--batch_size",type=int, default=64)
-    parser.add_argument("--max_epochs",type=int, default=10)
+    # rejection cost. If set to None, use adaptive cost.
+    parser.add_argument("--rejection_cost", type=float, default=None)
     # sampler
     parser.add_argument("--sampler", type=str, default="passive")
     parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
@@ -249,8 +249,13 @@ if __name__ == "__main__":
         args.plot_tsne = False  # only plot the first iteration
         results_list.append(results)
 
+    if args.rejection_cost is not None:
+        reject_tag = f"{args.rejection_cost:.2f}"
+    else:
+        reject_tag = "adaptive"
+
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}.json")
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}-{reject_tag}_{args.tag}.json")
     plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}",
+                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}-{reject_tag}_{args.tag}",
                  plot_labeled_frac)

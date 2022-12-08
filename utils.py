@@ -491,29 +491,44 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
 
 
 def compare_em_performance(figure_path, dataset, label_model, end_model, revision_model_list, sampler_list,
-                           tag, plot_labeled_frac=False):
+                           cost_list, tag, plot_labeled_frac=False):
+    """
+    Compare end model performance with different settings.
+    Only ONE of revision_model_list, sampler_list, cost_list should include multiple items
+    :param figure_path:
+    :param dataset:
+    :param label_model:
+    :param end_model:
+    :param revision_model_list:
+    :param sampler_list:
+    :param cost_list:
+    :param tag:
+    :param plot_labeled_frac:
+    :return:
+    """
     res = {}
     golden_res = 0
     for rm in revision_model_list:
         for sampler in sampler_list:
-            method = f"{rm}_{sampler}"
-            filepath = Path(figure_path) / dataset / f"{label_model}-{end_model}-{rm}-{sampler}_{tag}.json"
-            infile = open(filepath, "r")
-            results = json.load(infile)
-            results_list =results["data"]
-            n_run = len(results_list)
-            em_test = []
-            em_test_golden = []
-            for i in range(n_run):
-                em_test.append(results_list[i]["em_test"])
-                em_test_golden.append(results_list[i]["em_test_golden"])
+            for cost in cost_list:
+                method = f"{rm}_{sampler}_{cost}"
+                filepath = Path(figure_path) / dataset / f"{label_model}-{end_model}-{rm}-{sampler}-{cost}_{tag}.json"
+                infile = open(filepath, "r")
+                results = json.load(infile)
+                results_list =results["data"]
+                n_run = len(results_list)
+                em_test = []
+                em_test_golden = []
+                for i in range(n_run):
+                    em_test.append(results_list[i]["em_test"])
+                    em_test_golden.append(results_list[i]["em_test_golden"])
 
-            res[method] = np.array(em_test)
-            golden_res = np.array(em_test_golden).mean()
-            if plot_labeled_frac:
-                x = results_list[0]["frac_labeled"]
-            else:
-                x = results_list[0]["n_labeled"]
+                res[method] = np.array(em_test)
+                golden_res = np.array(em_test_golden).mean()
+                if plot_labeled_frac:
+                    x = results_list[0]["frac_labeled"]
+                else:
+                    x = results_list[0]["n_labeled"]
 
     fig, ax = plt.subplots()
     color_map = {
@@ -525,7 +540,9 @@ def compare_em_performance(figure_path, dataset, label_model, end_model, revisio
         5: "purple",
         6: "orange",
         7: "lime",
-        8: "violet"
+        8: "violet",
+        9: "navy",
+        10: "grey"
     }
     i = 0
     for method in res:
@@ -539,5 +556,11 @@ def compare_em_performance(figure_path, dataset, label_model, end_model, revisio
     ax.set_xlabel("label budget")
     ax.set_title(f"{dataset}-{label_model}-{end_model}_testAcc")
     ax.legend()
-    fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_testAcc.jpg"
+    if len(revision_model_list) > 1:
+        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_sp={sampler_list[0]}_c={cost_list[0]}_{tag}_testAcc.jpg"
+    elif len(sampler_list) > 1:
+        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_rm={revision_model_list[0]}_c={cost_list[0]}_{tag}_testAcc.jpg"
+    else:
+        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_rm={revision_model_list[0]}_sp={sampler_list[0]}_{tag}_testAcc.jpg"
+
     fig.savefig(fig_path)
