@@ -1,5 +1,6 @@
 # pipeline for active weasul
 import sys
+import time
 import argparse
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from labeller.labeller import get_labeller
@@ -16,6 +17,7 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
     """
     Run nashaat pipeline to clean noisy labels
     """
+    start = time.process_time()
     results = {
         "n_labeled": [],
         "frac_labeled": [],
@@ -53,6 +55,9 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
     if args.sample_budget < 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
         args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
+    else:
+        args.sample_budget = int(args.sample_budget)
+        args.sample_per_iter = int(args.sample_per_iter)
 
     while sampler.get_n_sampled() < args.sample_budget:
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
@@ -73,6 +78,7 @@ def run_active_weasul(train_data, valid_data, test_data, args, seed):
             print("Train covered acc: ", perf["train_covered_acc"])
             print("Test set acc: ", perf["em_test"])
 
+    results["time"] = time.process_time() - start
     return results
 
 
@@ -82,12 +88,12 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:0")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
-    parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
+    parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # sampler
     parser.add_argument("--sampler", type=str, default="maxkl")
-    parser.add_argument("--sample_budget", type=Union[int, float], default=0.05)  # Total sample budget
-    parser.add_argument("--sample_per_iter",type=Union[int, float], default=0.01)  # sample budget per iteration
+    parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
+    parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # label model and end models
     parser.add_argument("--penalty_strength", type=float, default=1000.0)
     parser.add_argument("--end_model", type=str, default="mlp")
@@ -138,9 +144,9 @@ if __name__ == "__main__":
         results_list.append(results)
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.json")
-    plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-aw-{args.sampler}-{args.penalty_strength:.2f}_{args.tag}.jpg",
-                 plot_labeled_frac)
+                 f"{args.label_model}_{args.end_model}_aw_{args.sampler}_{args.penalty_strength:.2f}_{args.tag}.json")
+    # plot_results(results_list, args.output_path, args.dataset, args.dataset,
+    #              f"{args.label_model}_{args.end_model}_aw_{args.sampler}_{args.penalty_strength:.2f}_{args.tag}",
+    #              plot_labeled_frac)
 
 

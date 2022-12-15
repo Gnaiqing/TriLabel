@@ -297,7 +297,7 @@ class LabelModel(PerformanceMixin):
 
         self.losses = []
         # Find z with SGD
-        for epoch in trange(self.n_epochs):
+        for epoch in range(self.n_epochs):
             optimizer.zero_grad()
             loss = self.loss_func()
             loss.backward()

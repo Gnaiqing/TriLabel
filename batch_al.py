@@ -24,8 +24,8 @@ repeats = 10
 for dataset in dataset_list:
     lm = "metal"
     em = "mlp"
-    sampler = "uncertain"
-    rm = "expert-label"  # use ensemble reviser when comparing AL methods
+    sampler = "uncertain-rm"
+    rm = "ensemble"  # use ensemble of mlp when comparing AL methods
     if em == "mlp":
         n_epochs = 100
     else:
@@ -34,9 +34,8 @@ for dataset in dataset_list:
         ext = " --extract_fn bert"
     else:
         ext = ""
-    cmd = f"python main_rlf.py --device {device} --dataset {dataset} {ext} --label_model {lm} " \
+    cmd = f"python al_pipeline.py --device {device} --dataset {dataset} {ext} --label_model {lm} " \
           f"--end_model {em} --em_epochs {n_epochs} --sampler {sampler} --revision_model {rm} " \
-          f"--revision_type LF --use_valid_labels --use_soft_labels --repeats {repeats} --tag {tag} " \
-          f"--sample_budget 100 --sample_per_iter 10"
+          f"--use_valid_labels --repeats {repeats} --sample_per_iter 10 --sample_budget 100 --tag {tag}"
     print(cmd)
     os.system(cmd)

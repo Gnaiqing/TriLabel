@@ -1,5 +1,6 @@
 import sys
 import argparse
+import time
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from wrench.dataset import get_dataset_type
 from labeller.labeller import get_labeller
@@ -81,6 +82,7 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     """
     Run an active learning pipeline to revise label functions
     """
+    start = time.process_time()
     results = {
         "n_labeled": [],
         "frac_labeled": [],
@@ -122,6 +124,9 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     if args.sample_budget < 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
         args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
+    else:
+        args.sample_budget = int(args.sample_budget)
+        args.sample_per_iter = int(args.sample_per_iter)
 
     while sampler.get_n_sampled() < args.sample_budget:
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
@@ -173,16 +178,17 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
             print("Revision model acc: ", perf["rm_covered_acc"])
             print("Test set acc: ", perf["em_test"])
 
+    results["time"] = time.process_time() - start
     return results
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # device info
-    parser.add_argument("--device", type=str, default="cuda:1")
+    parser.add_argument("--device", type=str, default="cuda:0")
     # dataset
     parser.add_argument("--dataset", type=str, default="youtube")
-    parser.add_argument("--dataset_path", type=str, default="../wrench-1.1/datasets/")
+    parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # contrastive learning. If set to None, use original features.
     parser.add_argument("--contrastive_mode", type=str, default=None)
@@ -223,13 +229,17 @@ if __name__ == "__main__":
         args.sample_per_iter = int(args.sample_per_iter)
 
     if args.load_results:
+        if args.rejection_cost is not None:
+            reject_tag = f"{args.rejection_cost:.2f}"
+        else:
+            reject_tag = "adaptive"
         filepath = Path(args.output_path) / args.dataset / \
-                   f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}_{args.tag}.json"
+                   f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}.json"
         readfile = open(filepath, "r")
         results = json.load(readfile)
         results_list = results["data"]
         plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                     f"{args.label_model}-{args.end_model}-nashaat_{args.tag}.jpg",
+                     f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}",
                      plot_labeled_frac)
         sys.exit(0)
 
@@ -254,7 +264,7 @@ if __name__ == "__main__":
         reject_tag = "adaptive"
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}-{reject_tag}_{args.tag}.json")
-    plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                 f"{args.label_model}-{args.end_model}-{args.revision_model}-{args.sampler}-{reject_tag}_{args.tag}",
-                 plot_labeled_frac)
+                 f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}.json")
+    # plot_results(results_list, args.output_path, args.dataset, args.dataset,
+    #              f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}",
+    #              plot_labeled_frac)

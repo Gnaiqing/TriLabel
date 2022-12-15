@@ -1,0 +1,3 @@
+00: use active weasul as label model, mlp as end model
+01: comapre active learning with relief using smaller label budget per iteration
+02: use metal as label model, mlp as end model
