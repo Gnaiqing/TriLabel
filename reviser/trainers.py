@@ -102,8 +102,6 @@ class NeuralNetworkTrainer:
                 val_loss = val_loss.mean().cpu().numpy()
                 # print('Iter {0}/{1}, Training Loss {2}'.format(i, self.num_iterations, loss.item()))
                 # print('Iter {0}/{1}, Validation Loss {2}'.format(i, self.num_iterations, val_loss))
-            elif i % 50 == 0:
-                print('Iter {0}/{1}, Training Loss {2}'.format(i, self.num_iterations, loss.item()))
 
             if early_stopping:
                 if val_loss > best_val_loss:

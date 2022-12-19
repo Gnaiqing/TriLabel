@@ -1,3 +1,4 @@
 00: use active weasul as label model, mlp as end model
 01: comapre active learning with relief using smaller label budget per iteration
 02: use metal as label model, mlp as end model
+03: after pipeline update. Now use self-designed reviser and sampler, and the cost varies per data point

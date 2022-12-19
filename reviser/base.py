@@ -1,4 +1,5 @@
 from wrench.dataset.utils import check_weak_labels
+import numpy as np
 from utils import ABSTAIN
 import copy
 import torch
@@ -25,6 +26,7 @@ class BaseReviser:
         self.train_rep = self.get_feature(self.train_data)
         self.device = device
         self.seed = seed
+        self.margin = 0.1
         self.clf = None
         self.sampled_indices = None
         self.sampled_labels = None
@@ -42,44 +44,39 @@ class BaseReviser:
         else:
             return dataset.features
 
-    def train_revision_model(self, indices, labels, cost):
+    def train_revision_model(self, indices, labels):
         """
         Train a revision model using sampled training data
         """
         raise NotImplementedError
 
-    def predict_labels(self, dataset, cost):
+    def predict(self, dataset):
         """
         Predict labels for dataset with abstention
         :param dataset: dataset to predict
-        :param cost: cost for wrong prediction
         """
-        raise NotImplementedError
+        proba = self.predict_proba(dataset)
+        reject_indices = np.max(proba, axis=1) < 1 / dataset.n_class + self.margin
+        preds = np.argmax(proba, axis=1)
+        preds[reject_indices] = ABSTAIN
+        return preds
 
     def predict_proba(self, dataset):
         """
-        Predict posterior class distribution of dataset. This method only apply for confidence-based revision model.
+        Predict posterior class distribution of dataset.
         :param dataset: dataset to predict
         """
         raise NotImplementedError
 
-    def get_revised_dataset(self, dataset_type, cost):
+    def get_revised_dataset(self, dataset, y_pred):
         """
-        Revise dataset
-        :param dataset_type: "train" or "valid"
-        :param cost: cost for wrong classification
+        Revise dataset's weak labels using predicted labels
+        :param dataset: dataset to revise
+        :param labels: labels to revise. ABSTAIN means do not revise specific weak labels
         :return: revised dataset
         """
-        if dataset_type == "train":
-            dataset = self.train_data
-        elif dataset_type == "valid":
-            dataset = self.valid_data
-        else:
-            raise ValueError(f"dataset type {dataset_type} not supported.")
-
         revised_dataset = copy.copy(dataset)
         revised_weak_labels = check_weak_labels(dataset)
-        y_pred = self.predict_labels(dataset, cost)
         # correct all weak labels using predicted labels
         for lf_idx in range(dataset.n_lf):
             correct_mask = y_pred != ABSTAIN

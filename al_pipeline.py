@@ -1,4 +1,4 @@
-# pipeline for active weasul
+# pipeline for active learning
 import sys
 import time
 import argparse
@@ -9,22 +9,16 @@ import json
 import numpy as np
 from utils import evaluate_al_performance, plot_results, save_results, evaluate_golden_performance, \
     get_sampler, get_label_model, get_reviser, ABSTAIN
-from typing import Union
 from main_rlf import update_results
 
 
 def run_active_learning(train_data, valid_data, test_data, args, seed):
-    """
-    Run nashaat pipeline to clean noisy labels
-    """
     start = time.process_time()
     results = {
         "n_labeled": [],
         "frac_labeled": [],
         "train_coverage": [],
         "train_covered_acc": [],
-        "rm_coverage": [],
-        "rm_covered_acc": [],
         "em_test": [],
     }
     # record original stats
@@ -41,13 +35,13 @@ def run_active_learning(train_data, valid_data, test_data, args, seed):
 
     # set labeller, sampler, label_model, reviser and encoder
     labeller = get_labeller(args.labeller)
-    label_model = get_label_model(args.label_model)
+    label_model = get_label_model("mv")
     if args.use_valid_labels:
         label_model.fit(dataset_train=train_data, dataset_valid=valid_data)
     else:
         label_model.fit(dataset_train=train_data)
     encoder = None
-    reviser = get_reviser(args.revision_model, train_data, valid_data, encoder, args.device, seed)
+    reviser = get_reviser("mlp", train_data, valid_data, encoder, args.device, seed)
     sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser, encoder)
 
     if args.sample_budget < 1:
@@ -61,7 +55,7 @@ def run_active_learning(train_data, valid_data, test_data, args, seed):
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
         indices, labels = sampler.get_sampled_points()
-        reviser.train_revision_model(indices, labels, cost=0.1)
+        reviser.train_revision_model(indices, labels)
         ground_truth_labels = np.repeat(ABSTAIN, len(train_data))
         ground_truth_labels[indices] = labels
         perf = evaluate_al_performance(train_data, valid_data, test_data, args, seed,
@@ -96,16 +90,12 @@ if __name__ == "__main__":
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # sampler
     parser.add_argument("--sampler", type=str, default="uncertain-rm")
-    parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
+    parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
-    # label model and end models. LM here is just used to keep API format
-    parser.add_argument("--label_model", type=str, default="mv")
+    # end model
     parser.add_argument("--end_model", type=str, default="mlp")
     parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
-    # revision model. RM may be used for sampler.
-    parser.add_argument("--revision_model", type=str, default="ensemble")
-    parser.add_argument("--rejection_cost", type=float, default=None)
     # other settings
     parser.add_argument("--use_valid_labels", action="store_true")
     parser.add_argument("--labeller", type=str, default="oracle")
@@ -125,12 +115,12 @@ if __name__ == "__main__":
 
     if args.load_results:
         filepath = Path(args.output_path) / args.dataset / \
-                   f"None_{args.end_model}_al_{args.sampler}_None_{args.tag}.json"
+                   f"None_{args.end_model}_al_{args.sampler}_{args.tag}.json"
         readfile = open(args.load_results, "r")
         results = json.load(readfile)
         results_list = results["data"]
         plot_results(results_list, args.output_path, args.dataset, args.dataset,
-                     f"None_{args.end_model}_al_{args.sampler}_None_{args.tag}",
+                     f"None_{args.end_model}_al_{args.sampler}_{args.tag}",
                      plot_labeled_frac)
         sys.exit(0)
 
@@ -149,9 +139,6 @@ if __name__ == "__main__":
         results_list.append(results)
 
     save_results(results_list, args.output_path, args.dataset,
-                 f"None_{args.end_model}_al_{args.sampler}_None_{args.tag}.json")
-    # plot_results(results_list, args.output_path, args.dataset, args.dataset,
-    #              f"None_{args.end_model}_al_{args.sampler}_None_{args.tag}",
-    #              plot_labeled_frac)
+                 f"None_{args.end_model}_al_{args.sampler}_{args.tag}.json")
 
 

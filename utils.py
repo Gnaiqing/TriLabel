@@ -113,13 +113,15 @@ def get_end_model(model_type):
 
 def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder):
     from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, \
-        RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler
+        RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler, JointUncertaintySampler
     if sampler_type == "passive":
         return PassiveSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "uncertain":
         return UncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "uncertain-rm":
         return RmUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+    elif sampler_type == "uncertain-joint":
+        return JointUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "dal":
         return DALSampler(train_data, labeller, label_model, revision_model, encoder)
     elif sampler_type == "abstain":
@@ -133,22 +135,20 @@ def get_sampler(sampler_type, train_data, labeller, label_model, revision_model,
 
 
 def get_reviser(reviser_type, train_data, valid_data, encoder,  device, seed):
-    from reviser import CostSensitiveReviser, EnsembleReviser, ExpertLabelReviser, MCDropoutReviser, \
-        MLPReviser, MLPTempReviser
+    from reviser import EnsembleReviser, ExpertLabelReviser, MCDropoutReviser, \
+        MLPReviser, MLPTempReviser, DalenReviser
     if reviser_type == "mlp":
         return MLPReviser(train_data, encoder, device, valid_data, seed)
     elif reviser_type == "mlp-temp":
         return MLPTempReviser(train_data, encoder, device, valid_data, seed)
-    elif reviser_type == "cs-hinge":
-        return CostSensitiveReviser(train_data, encoder, device, valid_data, seed, loss="cs-hinge")
-    elif reviser_type == "cs-sigmoid":
-        return CostSensitiveReviser(train_data, encoder, device, valid_data, seed, loss="cs-sigmoid")
     elif reviser_type == "ensemble":
         return EnsembleReviser(train_data, encoder, device, valid_data, seed)
     elif reviser_type == "expert-label":
         return ExpertLabelReviser(train_data, encoder, device, valid_data, seed)
     elif reviser_type == "mc-dropout":
         return MCDropoutReviser(train_data, encoder, device, valid_data, seed)
+    elif reviser_type == "dalen":
+        return DalenReviser(train_data, encoder, device, valid_data, seed)
     else:
         raise ValueError(f"reviser {reviser_type} not implemented.")
 
@@ -161,71 +161,24 @@ def score(y_true, y_pred, metric):
     return score
 
 
-def evaluate_performance(train_data, valid_data, test_data, args, seed,
-                         ground_truth_labels=None,
-                         rm_predict_labels=None):
+def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labels, args, seed):
     """
-    Evaluate the performance of weak supervision pipeline
+    Evaluate the end model's performance after revision
     """
-    seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    if args.label_model == "aw":
-        if hasattr(args, "penalty_strength"):
-            label_model = get_label_model(args.label_model, penalty_strength=args.penalty_strength)
-        else:
-            label_model = get_label_model(args.label_model)
-
-        if args.use_valid_labels:
-            label_model.fit(dataset_train=train_data,
-                            dataset_valid=valid_data,
-                            y_valid=valid_data.labels,
-                            ground_truth_labels=ground_truth_labels)
-        else:
-            label_model.fit(
-                dataset_train=train_data,
-                ground_truth_labels=ground_truth_labels
-            )
-    else:
-        label_model = get_label_model(args.label_model)
-        if args.use_valid_labels:
-            label_model.fit(dataset_train=train_data,
-                            dataset_valid=valid_data,
-                            y_valid=valid_data.labels)
-        else:
-            label_model.fit(dataset_train=train_data)
-
-    aggregated_soft_labels = label_model.predict_proba(train_data)
-    aggregated_hard_labels = label_model.predict(train_data)
-
-    # get covered set
-    covered = np.any(np.array(train_data.weak_labels) != ABSTAIN, axis=1)
-    non_nan = ~np.isnan(aggregated_soft_labels).any(axis=1)
-    covered = covered & non_nan
-    if args.revision_type in ["label", "both"] and rm_predict_labels is not None:
-        covered = covered | (rm_predict_labels != ABSTAIN)
-        rm_covered_pos = np.nonzero(rm_predict_labels != ABSTAIN)[0]
-        rm_covered_labels = rm_predict_labels[rm_covered_pos]
-        aggregated_soft_labels[rm_covered_pos, :] = 0.0
-        aggregated_soft_labels[rm_covered_pos, rm_covered_labels] = 1.0
-        aggregated_hard_labels[rm_covered_pos] = rm_covered_labels
-
-    covered_indices = np.nonzero(covered)[0]
-    covered_train_data = train_data.create_subset(covered_indices.tolist())
-    aggregated_soft_labels = aggregated_soft_labels[covered_indices,:]
-    aggregated_hard_labels = aggregated_hard_labels[covered_indices]
-    train_coverage = len(covered_train_data) / len(train_data)
-    train_covered_acc = accuracy_score(covered_train_data.labels, aggregated_hard_labels)
+    seed_everything(seed, workers=True)
+    aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
+    train_covered_acc = accuracy_score(train_data.labels, aggregated_hard_labels)
+    end_model = get_end_model(args.end_model)
+    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
     if args.use_soft_labels:
         aggregated_labels = aggregated_soft_labels
     else:
         aggregated_labels = aggregated_hard_labels
 
-    end_model = get_end_model(args.end_model)
-    n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
-
     if args.use_valid_labels:
         end_model.fit(
-            dataset_train=covered_train_data,
+            dataset_train=train_data,
             y_train=aggregated_labels,
             dataset_valid=valid_data,
             y_valid=valid_data.labels,
@@ -235,10 +188,9 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
             n_steps=n_steps,
             evaluation_step=evaluation_step
         )
-
     else:
         end_model.fit(
-            dataset_train=covered_train_data,
+            dataset_train=train_data,
             y_train=aggregated_labels,
             metric=args.metric,
             device=args.device,
@@ -246,23 +198,117 @@ def evaluate_performance(train_data, valid_data, test_data, args, seed,
             n_steps=n_steps,
             evaluation_step=evaluation_step
         )
-
     em_test = end_model.test(test_data, args.metric, device=args.device)
     perf = {
-        "train_coverage": train_coverage,
+        "train_coverage": 1.0,
         "train_covered_acc": train_covered_acc,
         "em_test": em_test,
-        "rm_coverage": np.nan,
-        "rm_covered_acc": np.nan,
     }
-    if rm_predict_labels is not None:
-        # record the coverage and accuracy of RM predict labels
-        rm_coverage = np.sum(rm_predict_labels != ABSTAIN) / len(rm_predict_labels)
-        rm_accuracy = np.sum(rm_predict_labels == np.array(train_data.labels)) / np.sum(rm_predict_labels != ABSTAIN)
-        perf["rm_coverage"] = rm_coverage
-        perf["rm_covered_acc"] = rm_accuracy
-
     return perf
+
+
+# def evaluate_performance(train_data, valid_data, test_data, args, seed,
+#                          ground_truth_labels=None,
+#                          rm_predict_labels=None):
+#     """
+#     Evaluate the performance of weak supervision pipeline
+#     """
+#     seed_everything(seed, workers=True)  # reproducibility for LM & EM
+#     if args.label_model == "aw":
+#         if hasattr(args, "penalty_strength"):
+#             label_model = get_label_model(args.label_model, penalty_strength=args.penalty_strength)
+#         else:
+#             label_model = get_label_model(args.label_model)
+#
+#         if args.use_valid_labels:
+#             label_model.fit(dataset_train=train_data,
+#                             dataset_valid=valid_data,
+#                             y_valid=valid_data.labels,
+#                             ground_truth_labels=ground_truth_labels)
+#         else:
+#             label_model.fit(
+#                 dataset_train=train_data,
+#                 ground_truth_labels=ground_truth_labels
+#             )
+#     else:
+#         label_model = get_label_model(args.label_model)
+#         if args.use_valid_labels:
+#             label_model.fit(dataset_train=train_data,
+#                             dataset_valid=valid_data,
+#                             y_valid=valid_data.labels)
+#         else:
+#             label_model.fit(dataset_train=train_data)
+#
+#     aggregated_soft_labels = label_model.predict_proba(train_data)
+#     aggregated_hard_labels = label_model.predict(train_data)
+#
+#     # get covered set
+#     covered = np.any(np.array(train_data.weak_labels) != ABSTAIN, axis=1)
+#     non_nan = ~np.isnan(aggregated_soft_labels).any(axis=1)
+#     covered = covered & non_nan
+#     if args.revision_type in ["label", "both"] and rm_predict_labels is not None:
+#         covered = covered | (rm_predict_labels != ABSTAIN)
+#         rm_covered_pos = np.nonzero(rm_predict_labels != ABSTAIN)[0]
+#         rm_covered_labels = rm_predict_labels[rm_covered_pos]
+#         aggregated_soft_labels[rm_covered_pos, :] = 0.0
+#         aggregated_soft_labels[rm_covered_pos, rm_covered_labels] = 1.0
+#         aggregated_hard_labels[rm_covered_pos] = rm_covered_labels
+#
+#     covered_indices = np.nonzero(covered)[0]
+#     covered_train_data = train_data.create_subset(covered_indices.tolist())
+#     aggregated_soft_labels = aggregated_soft_labels[covered_indices,:]
+#     aggregated_hard_labels = aggregated_hard_labels[covered_indices]
+#     train_coverage = len(covered_train_data) / len(train_data)
+#     train_covered_acc = accuracy_score(covered_train_data.labels, aggregated_hard_labels)
+#     if args.use_soft_labels:
+#         aggregated_labels = aggregated_soft_labels
+#     else:
+#         aggregated_labels = aggregated_hard_labels
+#
+#     end_model = get_end_model(args.end_model)
+#     n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+#     evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
+#
+#     if args.use_valid_labels:
+#         end_model.fit(
+#             dataset_train=covered_train_data,
+#             y_train=aggregated_labels,
+#             dataset_valid=valid_data,
+#             y_valid=valid_data.labels,
+#             metric=args.metric,
+#             device=args.device,
+#             verbose=args.verbose,
+#             n_steps=n_steps,
+#             evaluation_step=evaluation_step
+#         )
+#
+#     else:
+#         end_model.fit(
+#             dataset_train=covered_train_data,
+#             y_train=aggregated_labels,
+#             metric=args.metric,
+#             device=args.device,
+#             verbose=args.verbose,
+#             n_steps=n_steps,
+#             evaluation_step=evaluation_step
+#         )
+#
+#     em_test = end_model.test(test_data, args.metric, device=args.device)
+#     perf = {
+#         "train_coverage": train_coverage,
+#         "train_covered_acc": train_covered_acc,
+#         "em_test": em_test,
+#         "rm_coverage": np.nan,
+#         "rm_covered_acc": np.nan,
+#     }
+#     if rm_predict_labels is not None:
+#         # record the coverage and accuracy of RM predict labels
+#         rm_coverage = np.sum(rm_predict_labels != ABSTAIN) / len(rm_predict_labels)
+#         rm_accuracy = np.sum(rm_predict_labels == np.array(train_data.labels)) / np.sum(rm_predict_labels != ABSTAIN)
+#         perf["rm_coverage"] = rm_coverage
+#         perf["rm_covered_acc"] = rm_accuracy
+#
+#     return perf
 
 
 def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
@@ -277,7 +323,7 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
         y_valid=valid_data.labels,
         metric=args.metric,
         device=args.device,
-        verbose=True,
+        verbose=args.verbose,
         n_steps=n_steps,
         evaluation_step=evaluation_step
     )
@@ -299,8 +345,6 @@ def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
             "train_coverage": 0.0,
             "train_covered_acc": 1.0,
             "em_test": 0.0,
-            "rm_coverage": np.nan,
-            "rm_covered_acc": np.nan
         }
         return perf
 
@@ -336,8 +380,6 @@ def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
         "train_coverage": len(labeled_train_data) / len(train_data),
         "train_covered_acc": 1.0,
         "em_test": em_test,
-        "rm_coverage": np.nan,
-        "rm_covered_acc": np.nan
     }
     return perf
 
@@ -448,68 +490,49 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     train_fig_path = os.path.join(dirname, filename + "_train.jpg")
     fig.savefig(train_fig_path)
 
-    # fig2, ax2 = plt.subplots()
-    # ax2.axhline(y=res["em_test_golden"].mean(), color='k', linestyle='--')
-    # y = res["em_test"].mean(axis=0)
-    # y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
-    # ax2.plot(x, y, label="Test set accuracy (EM)", c="g")
-    # ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
-    # ax2.set_xlabel("label budget")
-    # ax2.set_title(title + "_test")
-    # ax2.legend()
-    # test_fig_path = os.path.join(dirname, filename + "_test.jpg")
-    # fig2.savefig(test_fig_path)
 
-
-def compare_baseline_performance(figure_path, dataset, tag,
+def compare_baseline_performance(filepaths, dataset, tag,
+                                 output_dir="output/",
                                  plot_labeled_frac=False):
     """
     Compare the performance with baselines (nashaat, active weasul, weak supervision, active learning)
-    :param figure_path: path to store figure
+    :param figure_paths: dictionary that maps method name to json file path
     :param dataset: dataset name
     :param tag: experiment tag
-    :param revision_model: revision model used by ReLieF
-    :param sampler: sampler used by ReLieF
-    :param cost: cost used by ReLieF
-    :param penalty: penalty weight used by Active WeaSuL
-    :param plot_labeled_frac:
+    :param plot_labeled_frac: plot labeled frac or labeled size on x axis
     :return:
     """
     res = {}
-    filepaths = {
-        "Nashaat": Path(figure_path) / dataset / f"metal_mlp_expert-label_uncertain_adaptive_{tag}.json",
-        "Active WeasuL": Path(figure_path) / dataset / f"metal_mlp_aw_maxkl_1000.00_{tag}.json",
-        "Active Learning": Path(figure_path) / dataset / f"None_mlp_al_uncertain-rm_None_{tag}.json",
-        "ReLieF": Path(figure_path) / dataset / f"metal_mlp_ensemble_uncertain-rm_adaptive_{tag}.json",
-    }
     runtimes = []
     methods = []
     # get the result of ReLieF
     for method in filepaths:
         filepath = filepaths[method]
-        if os.path.exists(filepath):
-            methods.append(method)
-            infile = open(filepath, "r")
-            results = json.load(infile)
-            results_list = results["data"]
-            n_run = len(results_list)
-            em_test = []
-            em_test_golden = []
-            runtime = []
-            for i in range(n_run):
-                em_test.append(results_list[i]["em_test"])
-                em_test_golden.append(results_list[i]["em_test_golden"])
-                runtime.append(results_list[i]["time"])
+        if not os.path.exists(filepath):
+            raise Exception(f"Filepath {filepath} not found.")
 
-            res[method] = np.array(em_test)
-            runtimes.append(np.array(runtime).mean())
-            if method == "ReLieF":
-                golden_performance = np.array(em_test_golden).mean()
-                pws_performance = np.mean(res[method][:,0])  # initial weak supervision performance
-                if plot_labeled_frac:
-                    x = results_list[0]["frac_labeled"]
-                else:
-                    x = results_list[0]["n_labeled"]
+        methods.append(method)
+        infile = open(filepath, "r")
+        results = json.load(infile)
+        results_list = results["data"]
+        n_run = len(results_list)
+        em_test = []
+        em_test_golden = []
+        runtime = []
+        for i in range(n_run):
+            em_test.append(results_list[i]["em_test"])
+            em_test_golden.append(results_list[i]["em_test_golden"])
+            runtime.append(results_list[i]["time"])
+
+        res[method] = np.array(em_test)
+        runtimes.append(np.array(runtime).mean())
+        if method == "ReLieF":
+            golden_performance = np.array(em_test_golden).mean()
+            pws_performance = np.mean(res[method][:,0])  # initial weak supervision performance
+            if plot_labeled_frac:
+                x = results_list[0]["frac_labeled"]
+            else:
+                x = results_list[0]["n_labeled"]
 
     fig, ax = plt.subplots()
     color_map = {
@@ -520,10 +543,6 @@ def compare_baseline_performance(figure_path, dataset, tag,
         4: "purple",
         5: "lime",
         6: "orange",
-        7: "lime",
-        8: "violet",
-        9: "navy",
-        10: "grey"
     }
     i = 0
     for method in res:
@@ -540,7 +559,7 @@ def compare_baseline_performance(figure_path, dataset, tag,
     ax.set_ylabel("test accuracy")
     ax.set_title(dataset)
     ax.legend()
-    fig_path = Path(figure_path) / dataset / f"{tag}_BaselineCmp.jpg"
+    fig_path = Path(output_dir) / dataset / f"{tag}_BaselineCmp.jpg"
     fig.savefig(fig_path)
     # plot runtime
     fig2, ax2 = plt.subplots()
@@ -549,7 +568,7 @@ def compare_baseline_performance(figure_path, dataset, tag,
     ax2.set_xlabel("Methods")
     ax2.set_ylabel("Runtime (Sec)")
     ax2.set_title(dataset)
-    fig_path = Path(figure_path) / dataset / f"{tag}_BaselineTime.jpg"
+    fig_path = Path(output_dir) / dataset / f"{tag}_BaselineTime.jpg"
     fig2.savefig(fig_path)
 
 

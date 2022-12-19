@@ -6,11 +6,12 @@ import numpy as np
 import torch
 
 
-class EnsembleReviser(BaseReviser):
+class DalenReviser(BaseReviser):
     """
     Use deep ensemble for uncertainty estimation
     """
     def train_revision_model(self, indices, labels):
+        # train ensemble of MLP for uncertainty estimation
         X_sampled = self.get_feature(self.train_data)[indices, :]
         y_sampled = labels
         training_dataset = TensorDataset(torch.tensor(X_sampled), torch.tensor(y_sampled))
@@ -32,6 +33,20 @@ class EnsembleReviser(BaseReviser):
             trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
             self.clf.append(clf)
 
+        # train a classifier to predict whether the data comes from labeled distribution
+        self.rejector = MLPNet(input_dim=self.train_rep.shape[1], output_dim=2)
+        unlabeled_indices = np.setdiff1d(np.arange(len(self.train_data)), indices)
+        if len(unlabeled_indices) > len(indices) * 5:
+            unlabeled_indices = np.random.choice(unlabeled_indices, len(indices)*5, replace=False)
+
+        X_l = self.get_feature(self.train_data)[indices, :]
+        X_u = self.get_feature(self.train_data)[unlabeled_indices, :]
+        X = np.vstack((X_l, X_u))
+        y = np.concatenate((np.repeat(0, len(indices)), np.repeat(1, len(unlabeled_indices))))
+        dis_dataset = TensorDataset(torch.tensor(X), torch.tensor(y))
+        trainer = NeuralNetworkTrainer(self.rejector)
+        trainer.train_model_with_dataloader(dis_dataset, None, device=self.device, early_stopping=False)
+
     def predict_proba(self, dataset):
         if self.clf is None:
             return np.ones((len(dataset), dataset.n_class)) / dataset.n_class
@@ -44,6 +59,9 @@ class EnsembleReviser(BaseReviser):
 
         proba = np.stack(proba_list, axis=0)
         proba = proba.mean(axis=0)
+
+        reject = self.rejector.predict(X)
+        proba[reject == 1, :] = 1 / self.train_data.n_class
         return proba
 
 

@@ -11,9 +11,9 @@ import json
 import numpy as np
 import pytorch_lightning as pl
 from contrastive.mlp import MLP
-from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, get_sampler, \
-    get_label_model, get_reviser
 from sklearn.metrics import accuracy_score
+from utils import evaluate_performance, plot_results, save_results, evaluate_golden_performance, get_sampler, \
+    get_label_model, get_reviser, ABSTAIN
 import copy
 
 
@@ -88,24 +88,11 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
         "frac_labeled": [],
         "train_coverage": [],
         "train_covered_acc": [],
-        "rm_coverage": [],
-        "rm_covered_acc": [],
+        "revised_frac": [],
+        "lm_acc": [],  # label model's accuracy on revised fraction
+        "revision_acc": [], # revision model's accuracy on revised fraction
         "em_test": [],
     }
-    # record original stats
-    perf = evaluate_performance(train_data, valid_data, test_data, args, seed=seed)
-    golden_perf = evaluate_golden_performance(train_data, valid_data, test_data, args, seed=seed)
-    update_results(results, perf, n_labeled=0, frac_labeled=0.0)
-    results["em_test_golden"] = golden_perf["em_test"]
-
-    if args.verbose:
-        lf_sum = train_data.lf_summary()
-        print("Original LF summary:\n", lf_sum)
-        print("Train coverage: ", perf["train_coverage"])
-        print("Train covered acc: ", perf["train_covered_acc"])
-        print("Test set acc: ", perf["em_test"])
-        print("Golden test set acc: ", golden_perf["em_test"])
-
     # set labeller, sampler, label_model, reviser and encoder
     labeller = get_labeller(args.labeller)
     label_model = get_label_model(args.label_model)
@@ -116,6 +103,24 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     encoder = None
     reviser = get_reviser(args.revision_model, train_data, valid_data, encoder, args.device, seed)
     sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser, encoder)
+    lm_probs = label_model.predict_proba(train_data)
+
+    # record original stats
+    perf = evaluate_performance(train_data, valid_data, test_data, lm_probs, args, seed)
+    golden_perf = evaluate_golden_performance(train_data, valid_data, test_data, args, seed)
+    update_results(results, perf, n_labeled=0, frac_labeled=0.0)
+    results["revised_frac"].append(0)
+    results["lm_acc"].append(np.nan)
+    results["revision_acc"].append(np.nan)
+    results["em_test_golden"] = golden_perf["em_test"]
+
+    if args.verbose:
+        lf_sum = train_data.lf_summary()
+        print("Original LF summary:\n", lf_sum)
+        print("Train coverage: ", perf["train_coverage"])
+        print("Train covered acc: ", perf["train_covered_acc"])
+        print("Test set acc: ", perf["em_test"])
+        print("Golden test set acc: ", golden_perf["em_test"])
 
     # initialize revised train and valid data
     revised_train_data = copy.copy(train_data)
@@ -131,51 +136,67 @@ def run_rlf(train_data, valid_data, test_data, args, seed):
     while sampler.get_n_sampled() < args.sample_budget:
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
         sampler.sample_distinct(n=n_to_sample)
+        # train revision model using labeled data
         indices, labels = sampler.get_sampled_points()
-        # estimate current accuracy of label model using valid labels or sampled train labels
-        if args.use_valid_labels:
-            lm_pred = label_model.predict(revised_valid_data)
-            lm_acc_hat = accuracy_score(revised_valid_data.labels, lm_pred)
-        else:
-            lm_pred = label_model.predict(revised_train_data)
-            lm_acc_hat = accuracy_score(labels, lm_pred[indices])
+        reviser.train_revision_model(indices, labels)
 
-        if args.rejection_cost is None:
-            cost = 1 - lm_acc_hat
-        else:
-            cost = args.rejection_cost
+        # revise probabilistic labels or LFs
+        lm_probs = label_model.predict_proba(revised_train_data)
+        lm_preds = label_model.predict(revised_train_data)
+        rm_probs = reviser.predict_proba(revised_train_data)
+        lm_conf = np.max(lm_probs, axis=1)
+        rm_conf = np.max(rm_probs, axis=1)
+        revised_indices = rm_conf >= lm_conf
+        aggregated_labels = lm_probs.copy()
 
-        print(f"Set cost to {cost:.2f}")
-        # train revision model
-        reviser.train_revision_model(indices, labels, cost=cost)
-        y_hat_train = reviser.predict_labels(reviser.train_data, cost)
+        if args.revision_type in ["label", "both"]:
+            # revise predicted labels based on RM predictions
+            aggregated_labels[revised_indices] = rm_probs[revised_indices]
+
         if args.revision_type in ["LF", "both"]:
-            # revise label functions
-            revised_train_data = reviser.get_revised_dataset("train", cost)
-            revised_valid_data = reviser.get_revised_dataset("valid", cost)
+            # Let's first try only revise LF on confident points
+            rm_preds = reviser.predict(revised_train_data)
+            rm_preds[rm_conf < args.revision_threshold] = ABSTAIN
+            revised_train_data = reviser.get_revised_dataset(revised_train_data, rm_preds)
 
-        perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, args,
-                                    rm_predict_labels=y_hat_train,
-                                    seed=seed)
+            if args.revision_model != "expert-label":
+                pred_valid = reviser.predict(revised_valid_data)
+                probs_valid = reviser.predict_proba(revised_valid_data)
+                conf_valid = np.max(probs_valid, axis=1)
+                pred_valid[conf_valid < args.revision_threshold] = ABSTAIN
+                revised_valid_data = reviser.get_revised_dataset(revised_valid_data, pred_valid)
 
-        n_labeled = sampler.get_n_sampled()
-        frac_labeled = n_labeled / len(train_data)
-        update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
-        # update stats of label model, sampler and reviser
-        label_model.fit(dataset_train=revised_train_data, dataset_valid=revised_valid_data)
+            label_model.fit(revised_train_data, revised_valid_data)
+
+        # update stats of sampler
         sampler.update_stats(revised_train_data,
                              label_model=label_model,
                              revision_model=reviser,
                              encoder=encoder)
-
+        perf = evaluate_performance(revised_train_data, revised_valid_data, test_data, aggregated_labels, args, seed)
+        n_labeled = sampler.get_n_sampled()
+        frac_labeled = n_labeled / len(train_data)
+        update_results(results, perf, n_labeled=n_labeled, frac_labeled=frac_labeled)
+        # check the LM and RM's performance on revised data
+        rm_preds = reviser.predict(revised_train_data)
+        labels = np.array(revised_train_data.labels)
+        if np.sum(revised_indices) == 0:
+            rm_acc = np.nan
+            lm_acc = np.nan
+        else:
+            rm_acc = accuracy_score(labels[revised_indices], rm_preds[revised_indices])
+            lm_acc = accuracy_score(labels[revised_indices], lm_preds[revised_indices])
+        revised_frac = np.sum(revised_indices) / len(revised_train_data)
+        results["revised_frac"].append(revised_frac)
+        results["lm_acc"].append(lm_acc)
+        results["revision_acc"].append(rm_acc)
         if args.verbose:
-            lf_sum = revised_train_data.lf_summary()
-            print(f"Revised LF summary at {n_labeled}({frac_labeled*100:.1f}%):")
-            print(lf_sum)
+            print(f"Sampled fraction: {frac_labeled:.2f}")
+            print(f"Revised fraction: {revised_frac:.2f}")
+            print(f"Reviser's accuracy on revised part: {rm_acc:.2f}")
+            print(f"Label model's accuracy on revised part (before revision): {lm_acc:.2f}")
             print("Train coverage: ", perf["train_coverage"])
             print("Train covered acc: ", perf["train_covered_acc"])
-            print("Revision model coverage: ", perf["rm_coverage"])
-            print("Revision model acc: ", perf["rm_covered_acc"])
             print("Test set acc: ", perf["em_test"])
 
     results["time"] = time.process_time() - start
@@ -192,15 +213,14 @@ if __name__ == "__main__":
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
     # contrastive learning. If set to None, use original features.
     parser.add_argument("--contrastive_mode", type=str, default=None)
-    # rejection cost. If set to None, use adaptive cost.
-    parser.add_argument("--rejection_cost", type=float, default=None)
     # sampler
-    parser.add_argument("--sampler", type=str, default="passive")
-    parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
+    parser.add_argument("--sampler", type=str, default="uncertain-joint")
+    parser.add_argument("--sample_budget", type=float, default=0.10)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # revision model
-    parser.add_argument("--revision_model", type=str, default="mlp")
+    parser.add_argument("--revision_model", type=str, default="dalen")
     parser.add_argument("--revision_type", type=str, default="both", choices=["LF", "label", "both"])
+    parser.add_argument("--revision_threshold", type=float, default=0.95)
     # label model and end models
     parser.add_argument("--label_model", type=str, default="metal")
     parser.add_argument("--end_model", type=str, default="mlp")
@@ -258,13 +278,5 @@ if __name__ == "__main__":
         args.plot_tsne = False  # only plot the first iteration
         results_list.append(results)
 
-    if args.rejection_cost is not None:
-        reject_tag = f"{args.rejection_cost:.2f}"
-    else:
-        reject_tag = "adaptive"
-
     save_results(results_list, args.output_path, args.dataset,
-                 f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}.json")
-    # plot_results(results_list, args.output_path, args.dataset, args.dataset,
-    #              f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{reject_tag}_{args.tag}",
-    #              plot_labeled_frac)
+                 f"{args.label_model}_{args.end_model}_{args.revision_model}_{args.sampler}_{args.tag}.json")

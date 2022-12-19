@@ -1,19 +1,16 @@
-from wrench.dataset.utils import check_weak_labels
 from reviser.base import BaseReviser
 from reviser.models import MLPNet
 from reviser.trainers import NeuralNetworkTrainer
 from torch.utils.data import TensorDataset
-from utils import ABSTAIN
-import copy
-import numpy as np
 import torch
+import numpy as np
 
 
 class MLPReviser(BaseReviser):
     """
     MLP trained with cross entropy loss
     """
-    def train_revision_model(self, indices, labels, cost):
+    def train_revision_model(self, indices, labels):
         self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
         trainer = NeuralNetworkTrainer(self.clf)
         X_sampled = self.get_feature(self.train_data)[indices, :]
@@ -28,17 +25,9 @@ class MLPReviser(BaseReviser):
 
         trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
 
-    def predict_labels(self, dataset, cost):
-        proba = self.predict_proba(dataset)
-        y_pred = np.argmax(proba, axis=1)
-        max_prob = np.max(proba, axis=1)
-        y_pred[max_prob < 1-cost] = ABSTAIN
-        return y_pred
-
     def predict_proba(self, dataset):
         if self.clf is None:
-            return None
-
+            return np.ones((len(dataset), dataset.n_class)) / dataset.n_class
         X = torch.tensor(self.get_feature(dataset)).to(self.device)
         proba = self.clf.predict_proba(X)
         return proba

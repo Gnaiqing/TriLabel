@@ -1,41 +1,51 @@
 import os
+from utils import compare_baseline_performance
 
 dataset_list = [
-    "spambase",
-    "mushroom",
-    "bank-marketing",
+    # "spambase",
+    # "mushroom",
+    # "youtube",
+    # "imdb"
     "PhishingWebsites",
     "Bioresponse",
+    "bank-marketing",
     "census",
-    "trec",
-    "semeval",
     "tennis",
+    "yelp"
 ]
 
 text_datasets = [
-    "trec",
-    "semeval"
+    "youtube",
+    "imdb",
+    "yelp"
 ]
 
-tag = "02"
+tag = "03"
 device = "cuda:0"
-repeats = 10
 
 for dataset in dataset_list:
-    lm = "metal"
-    em = "mlp"
-    sampler = "uncertain-rm"
-    rm = "ensemble"  # use ensemble reviser when comparing AL methods
-    if em == "mlp":
-        n_epochs = 100
-    else:
-        n_epochs = 5
     if dataset in text_datasets:
         ext = " --extract_fn bert"
     else:
         ext = ""
-    cmd = f"python main_rlf.py --device {device} --dataset {dataset} {ext} --label_model {lm} " \
-          f"--end_model {em} --em_epochs {n_epochs} --sampler {sampler} --revision_model {rm} " \
-          f"--use_valid_labels --use_soft_labels --repeats {repeats} --sample_budget 100 --sample_per_iter 10 --tag {tag}"
-    print(cmd)
-    os.system(cmd)
+    relief_cmd = f"python main_rlf.py --device {device} --dataset {dataset} {ext} " \
+                 f"--use_valid_labels --use_soft_labels --tag {tag}"
+    print(relief_cmd)
+    os.system(relief_cmd)
+    al_cmd = f"python al_pipeline.py --device {device} --dataset {dataset} {ext} " \
+             f"--use_valid_labels --use_soft_labels --tag {tag}"
+    print(al_cmd)
+    os.system(al_cmd)
+    nashaat_cmd = f"python main_rlf.py --device {device} --dataset {dataset} {ext} " \
+                  f"--sampler uncertain --revision_model expert-label --revision_type LF " \
+                  f"--use_valid_labels --use_soft_labels --tag {tag}"
+    print(nashaat_cmd)
+    os.system(nashaat_cmd)
+
+for dataset in dataset_list:
+    filepaths = {
+        "ReLieF": f"output/{dataset}/metal_mlp_dalen_uncertain-joint_{tag}.json",
+        "Active Learning": f"output/{dataset}/None_mlp_al_uncertain-rm_{tag}.json",
+        "Nashaat": f"output/{dataset}/metal_mlp_expert-label_uncertain_{tag}.json"
+    }
+    compare_baseline_performance(filepaths, dataset, tag)
