@@ -163,7 +163,7 @@ def score(y_true, y_pred, metric):
 
 def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labels, args, seed):
     """
-    Evaluate the end model's performance after revision
+    Evaluate the end model's performance after revising labels
     """
     seed_everything(seed, workers=True)
     aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
@@ -205,110 +205,6 @@ def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labe
         "em_test": em_test,
     }
     return perf
-
-
-# def evaluate_performance(train_data, valid_data, test_data, args, seed,
-#                          ground_truth_labels=None,
-#                          rm_predict_labels=None):
-#     """
-#     Evaluate the performance of weak supervision pipeline
-#     """
-#     seed_everything(seed, workers=True)  # reproducibility for LM & EM
-#     if args.label_model == "aw":
-#         if hasattr(args, "penalty_strength"):
-#             label_model = get_label_model(args.label_model, penalty_strength=args.penalty_strength)
-#         else:
-#             label_model = get_label_model(args.label_model)
-#
-#         if args.use_valid_labels:
-#             label_model.fit(dataset_train=train_data,
-#                             dataset_valid=valid_data,
-#                             y_valid=valid_data.labels,
-#                             ground_truth_labels=ground_truth_labels)
-#         else:
-#             label_model.fit(
-#                 dataset_train=train_data,
-#                 ground_truth_labels=ground_truth_labels
-#             )
-#     else:
-#         label_model = get_label_model(args.label_model)
-#         if args.use_valid_labels:
-#             label_model.fit(dataset_train=train_data,
-#                             dataset_valid=valid_data,
-#                             y_valid=valid_data.labels)
-#         else:
-#             label_model.fit(dataset_train=train_data)
-#
-#     aggregated_soft_labels = label_model.predict_proba(train_data)
-#     aggregated_hard_labels = label_model.predict(train_data)
-#
-#     # get covered set
-#     covered = np.any(np.array(train_data.weak_labels) != ABSTAIN, axis=1)
-#     non_nan = ~np.isnan(aggregated_soft_labels).any(axis=1)
-#     covered = covered & non_nan
-#     if args.revision_type in ["label", "both"] and rm_predict_labels is not None:
-#         covered = covered | (rm_predict_labels != ABSTAIN)
-#         rm_covered_pos = np.nonzero(rm_predict_labels != ABSTAIN)[0]
-#         rm_covered_labels = rm_predict_labels[rm_covered_pos]
-#         aggregated_soft_labels[rm_covered_pos, :] = 0.0
-#         aggregated_soft_labels[rm_covered_pos, rm_covered_labels] = 1.0
-#         aggregated_hard_labels[rm_covered_pos] = rm_covered_labels
-#
-#     covered_indices = np.nonzero(covered)[0]
-#     covered_train_data = train_data.create_subset(covered_indices.tolist())
-#     aggregated_soft_labels = aggregated_soft_labels[covered_indices,:]
-#     aggregated_hard_labels = aggregated_hard_labels[covered_indices]
-#     train_coverage = len(covered_train_data) / len(train_data)
-#     train_covered_acc = accuracy_score(covered_train_data.labels, aggregated_hard_labels)
-#     if args.use_soft_labels:
-#         aggregated_labels = aggregated_soft_labels
-#     else:
-#         aggregated_labels = aggregated_hard_labels
-#
-#     end_model = get_end_model(args.end_model)
-#     n_steps = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-#     evaluation_step = int(np.ceil(len(covered_train_data) / end_model.hyperparas["batch_size"])) # evaluate every epoch
-#
-#     if args.use_valid_labels:
-#         end_model.fit(
-#             dataset_train=covered_train_data,
-#             y_train=aggregated_labels,
-#             dataset_valid=valid_data,
-#             y_valid=valid_data.labels,
-#             metric=args.metric,
-#             device=args.device,
-#             verbose=args.verbose,
-#             n_steps=n_steps,
-#             evaluation_step=evaluation_step
-#         )
-#
-#     else:
-#         end_model.fit(
-#             dataset_train=covered_train_data,
-#             y_train=aggregated_labels,
-#             metric=args.metric,
-#             device=args.device,
-#             verbose=args.verbose,
-#             n_steps=n_steps,
-#             evaluation_step=evaluation_step
-#         )
-#
-#     em_test = end_model.test(test_data, args.metric, device=args.device)
-#     perf = {
-#         "train_coverage": train_coverage,
-#         "train_covered_acc": train_covered_acc,
-#         "em_test": em_test,
-#         "rm_coverage": np.nan,
-#         "rm_covered_acc": np.nan,
-#     }
-#     if rm_predict_labels is not None:
-#         # record the coverage and accuracy of RM predict labels
-#         rm_coverage = np.sum(rm_predict_labels != ABSTAIN) / len(rm_predict_labels)
-#         rm_accuracy = np.sum(rm_predict_labels == np.array(train_data.labels)) / np.sum(rm_predict_labels != ABSTAIN)
-#         perf["rm_coverage"] = rm_coverage
-#         perf["rm_covered_acc"] = rm_accuracy
-#
-#     return perf
 
 
 def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
@@ -431,9 +327,9 @@ def save_results(results_list, output_path, dataset, filename):
         json.dump({"data": results_list}, write_file, indent=4)
 
 
-def plot_results(results_list, figure_path, dataset, title, filename, plot_labeled_frac=False):
+def plot_dpal_results(results_list, figure_path, dataset, nametag, plot_labeled_frac=False):
     """
-    Plot pipeline results
+    Plot pipeline results (train label accuracy and test set performance)
     :param results:
     :return:
     """
@@ -441,12 +337,17 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     n_run = len(results_list)
 
     res = {
-        "train_coverage": [],
-        "train_covered_acc": [],
-        "em_test": [],
-        "em_test_golden": [],
-        "rm_coverage": [],
-        "rm_covered_acc": []
+        "n_labeled": [],  # number of expert labeled data
+        "frac_labeled": [],  # fraction of expert labeled data
+        "al_label_acc": [],  # AL label accuracy
+        "al_active_frac": [],  # fraction of data following dp prediction
+        "dp_active_acc": [],  # DP label accuracy on active region
+        "al_active_acc": [],  # AL label accuracy on active region
+        "dpal_label_acc": [],  # DPAL label accuracy
+        "em_test": [],  # end model's test performance
+        "em_test_al": [],  # end model's test accuracy when using active learning
+        "dp_label_acc": [],  # DP label accuracy
+        "em_test_golden": []  # end model's test performance using golden labels
     }
     for i in range(n_run):
         for key in res:
@@ -460,35 +361,57 @@ def plot_results(results_list, figure_path, dataset, title, filename, plot_label
     else:
         x = results_list[0]["n_labeled"]
 
+    # plot train label accuracy
     fig, ax = plt.subplots()
-    y = res["train_coverage"].mean(axis=0)
-    y_stderr = res["train_coverage"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="Train label coverage", c="b")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="b")
+    y = res["dp_label_acc"].mean()
+    y_stderr = res["dp_label_acc"].std() / np.sqrt(n_run)
+    ax.plot(x, np.repeat(y, len(x)), label="DP label accuracy", c="b")
+    ax.fill_between(x, np.repeat(y-1.96 * y_stderr, len(x)), np.repeat(y+1.96 * y_stderr, len(x)),alpha=.1, color="b")
 
-    y = res["train_covered_acc"].mean(axis=0)
-    y_stderr = res["train_covered_acc"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="Train label accuracy", c="r")
+    y = res["al_label_acc"].mean(axis=0)
+    y_stderr = res["al_label_acc"].std(axis=0) / np.sqrt(n_run)
+    ax.plot(x, y, label="AL label accuracy", c="g")
+    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
+
+    y = res["dpal_label_acc"].mean(axis=0)
+    y_stderr = res["dpal_label_acc"].std(axis=0) / np.sqrt(n_run)
+    ax.plot(x, y, label="DPAL label accuracy", c="r")
     ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
 
-    if not np.isnan(res["rm_coverage"]).all():
-        y = np.nanmean(res["rm_coverage"], axis=0)
-        y_stderr = np.nanstd(res["rm_coverage"], axis=0) / np.sqrt(n_run)
-        ax.plot(x, y, label="Revision model coverage", c="orange")
-        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="orange")
-
-        y = np.nanmean(res["rm_covered_acc"], axis=0)
-        y_stderr = np.nanstd(res["rm_covered_acc"], axis=0) / np.sqrt(n_run)
-        ax.plot(x, y, label="Revision model accuracy", c="cyan")
-        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="cyan")
-
     ax.set_xlabel("label budget")
-    ax.set_title(title + "_train")
+    ax.set_ylabel("train label accuracy")
+    ax.set_title(dataset+" Train Label Accuracy")
     ax.legend()
     dirname = Path(figure_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)
-    train_fig_path = os.path.join(dirname, filename + "_train.jpg")
+    train_fig_path = os.path.join(dirname, nametag + "_TrainLabel.jpg")
     fig.savefig(train_fig_path)
+
+    fig2, ax2 = plt.subplots()
+    y = res["em_test"][:,0].mean()
+    y_stderr = res["em_test"][:,0].std() / np.sqrt(n_run)
+    ax2.plot(x, np.repeat(y, len(x)), label="DP test accuracy", c="b")
+    ax2.fill_between(x, np.repeat(y - 1.96 * y_stderr, len(x)), np.repeat(y + 1.96 * y_stderr, len(x)), alpha=.1,
+                    color="b")
+
+    y = res["em_test_al"].mean(axis=0)
+    y_stderr = res["em_test_al"].std(axis=0) / np.sqrt(n_run)
+    ax2.plot(x, y, label="AL test accuracy", c="g")
+    ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
+
+    y = res["em_test"].mean(axis=0)
+    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
+    ax2.plot(x, y, label="DPAL test accuracy", c="r")
+    ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
+
+    y = res["em_test_golden"].mean()
+    ax2.axhline(y, color='k', linestyle='--', label="Golden test accuracy")
+    ax2.set_xlabel("label budget")
+    ax2.set_ylabel("end model test accuracy")
+    ax2.set_title(dataset+" Test Accuracy")
+    ax2.legend()
+    test_fig_path = os.path.join(dirname, nametag + "_TestAcc.jpg")
+    fig2.savefig(test_fig_path)
 
 
 def compare_baseline_performance(filepaths, dataset, tag,
