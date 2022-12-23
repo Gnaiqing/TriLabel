@@ -1,18 +1,16 @@
 import os
-from utils import compare_baseline_performance
 
 dataset_list = [
     # "spambase",
     # "mushroom",
     # "youtube",
-    "imdb",
-    "yelp",
+    # "imdb",
+    # "yelp",
     # "tennis"
-    # "PhishingWebsites",
-    # "Bioresponse",
-    # "bank-marketing",
-    # "census",
-    # "tennis",
+    "PhishingWebsites",
+    "Bioresponse",
+    "bank-marketing",
+    "census",
     # "yelp"
 ]
 

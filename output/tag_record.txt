@@ -3,3 +3,4 @@
 02: use metal as label model, mlp as end model
 03: after pipeline update. Now use self-designed reviser and sampler, and the cost varies per data point
 04: pipeline update. Now correct labels instead of revise LFs.
+05: pipeline update. Now use Bayes' Theorem as theoretical background and support multiple ways to combine AL with DP.
