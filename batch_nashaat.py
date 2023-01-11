@@ -5,13 +5,16 @@ dataset_list = [
     "youtube",
     "imdb",
     "yelp",
-    ## tabular datasets
+    # ## tabular datasets
     "PhishingWebsites",
     "bank-marketing",
     "census",
     ## image datasets
     # "tennis",
     # "basketball",
+    ## multiclass datasets
+    "trec",
+    "agnews"
 ]
 
 bert_embedding_datasets = ["youtube", "imdb", "yelp", "trec", "agnews"]
@@ -23,7 +26,8 @@ for dataset in dataset_list:
     else:
         ext = ""
 
-    cmd = f"python aw_pipeline.py --dataset {dataset} {ext} --use_valid_labels --use_soft_labels --tag {tag}"
+    cmd = f"python nashaat_pipeline.py --dataset {dataset} {ext} --label_model metal " \
+          f"--use_valid_labels --use_soft_labels --tag {tag}"
     print(cmd)
     os.system(cmd)
 

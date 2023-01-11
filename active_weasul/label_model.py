@@ -208,11 +208,12 @@ class LabelModel(PerformanceMixin):
         self.class_balance = class_balance
 
         self.N, self.nr_wl = label_matrix.shape
-        self.y_set = np.unique(label_matrix)  # array of classes
-
-        # Ignore abstain label
-        if - 1 in self.y_set:
-            self.y_set = self.y_set[self.y_set != -1]
+        self.y_set = np.arange(len(class_balance))
+        # self.y_set = np.unique(label_matrix)  # array of classes
+        #
+        # # Ignore abstain label
+        # if - 1 in self.y_set:
+        #     self.y_set = self.y_set[self.y_set != -1]
 
         self.y_dim = len(self.y_set)  # number of classes
 
@@ -316,13 +317,19 @@ class LabelModel(PerformanceMixin):
         return self
 
     def predict(self, dataset):
-        label_matrix = np.array(dataset.weak_labels)
+        if isinstance(dataset, np.ndarray):
+            label_matrix = dataset
+        else:
+            label_matrix = np.array(dataset.weak_labels)
         probs = self._predict(label_matrix, self.mu, self.E_S).cpu().detach().numpy()
         preds = np.argmax(probs, axis=1)
         return preds
 
     def predict_proba(self, dataset):
-        label_matrix = np.array(dataset.weak_labels)
+        if isinstance(dataset, np.ndarray):
+            label_matrix = dataset
+        else:
+            label_matrix = np.array(dataset.weak_labels)
         probs = self._predict(label_matrix, self.mu, self.E_S).cpu().detach().numpy()
         return probs
 

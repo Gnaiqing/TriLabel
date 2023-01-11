@@ -12,13 +12,14 @@ import matplotlib.pyplot as plt
 
 
 def plot_conf_histogram(thresholds, accs, confs, dataset, output_path, tag):
+    plt.rcParams.update({'font.size': 16})
     fig, ax = plt.subplots()
-    ax.stairs(accs, thresholds, fill=True, color="blue", alpha=0.2, label="True Acc")
-    ax.stairs(confs, thresholds, fill=True, color="red", alpha=0.2, label="Pred Conf")
+    ax.stairs(accs, thresholds, fill=True, color="blue", alpha=0.2, label="True Accuracy")
+    ax.stairs(confs, thresholds, fill=True, color="red", alpha=0.2, label="Confidence")
     ax.set_xlabel("Confidence")
     ax.set_ylabel("Accuracy")
     ax.set_title(dataset)
-    ax.legend()
+    ax.legend(loc="upper left")
     filepath = Path(output_path) / dataset / f"confhist_{tag}.jpg"
     dirname = Path(output_path) / dataset
     Path(dirname).mkdir(parents=True, exist_ok=True)
@@ -72,7 +73,7 @@ def evaluate_uncertainty_estimation(train_data, valid_data, label_model_type, fe
         brier_score = (1 - 2 * probs[np.arange(N), labels] + np.sum(probs ** 2, axis=1)) / train_data.n_class
         brier_score = brier_score.mean()
         ece = 0
-        conf_thres = np.linspace(0.0, 1.0, 11)
+        conf_thres = np.linspace(0.5, 1.0, 11)
         bin_sizes = []
         binned_accs = []
         binned_confs = []
@@ -116,7 +117,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../datasets/")
-    parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
+    parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
     parser.add_argument("--label_model", type=str, default="metal")
     # other settings
     parser.add_argument("--ensemble_size", type=int, default=10)

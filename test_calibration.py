@@ -57,7 +57,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
-    parser.add_argument("--label_model", type=str, default="metal")
+    parser.add_argument("--label_model", type=str, default="snorkel")
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--exp_type", type=str, choices=["ensemble", "bootstrap", "LF_size"])
@@ -117,11 +117,11 @@ if __name__ == "__main__":
     else:
         K = 10  # fix ensemble size to 10
         if M <= 20:
-            fs_list = list(range(1, M+1, 2))
+            fs_list = list(range(3, M+1, 2))
         elif M <= 50:
-            fs_list = list(range(1, M+1, 5))
+            fs_list = list(range(3, M+1, 5))
         else:
-            fs_list = list(range(1, M+1, 10))
+            fs_list = list(range(3, M+1, 10))
 
         for fs in fs_list:
             res = evaluate_uncertainty_estimation(train_data, valid_data,

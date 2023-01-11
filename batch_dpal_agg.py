@@ -10,16 +10,16 @@ dataset_list = [
     "bank-marketing",
     "census",
     ## image datasets
-    "tennis",
-    "basketball",
+    # "tennis",
+    # "basketball",
     ## multiclass datasets
     "trec",
     "agnews"
 ]
 
 bert_embedding_datasets = ["youtube", "imdb", "yelp", "trec", "agnews"]
-label_model_list = ["snorkel", "mv"]
-tag = "06"
+label_model_list = ["metal"]
+tag = "07"
 test_mode = False
 for dataset in dataset_list:
     for lm in label_model_list:
@@ -29,8 +29,9 @@ for dataset in dataset_list:
             ext = ""
 
         # evaluate the effect of ensemble size, bootstrap and select features
-        for exp_type in ["ensemble", "bootstrap", "LF_size"]:
-            cmd = f"python test_calibration.py --dataset {dataset} {ext} --label_model {lm} --exp_type {exp_type} --tag {tag}"
+        for aggregation_method in ["bayesian", "average", "weighted", "confidence"]:
+            cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --aggregation_method {aggregation_method} " \
+                  f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
             print(cmd)
             os.system(cmd)
 

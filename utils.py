@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from numpy.random import default_rng
 from pytorch_lightning import seed_everything
 from pathlib import Path
+from scipy.stats import entropy
 import os
 import json
 
@@ -111,25 +112,25 @@ def get_end_model(model_type):
     return end_model
 
 
-def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder):
+def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder, seed=None):
     from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, \
         RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler, JointUncertaintySampler
     if sampler_type == "passive":
-        return PassiveSampler(train_data, labeller, label_model, revision_model, encoder)
+        return PassiveSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "uncertain":
-        return UncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+        return UncertaintySampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "uncertain-rm":
-        return RmUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+        return RmUncertaintySampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "uncertain-joint":
-        return JointUncertaintySampler(train_data, labeller, label_model, revision_model, encoder)
+        return JointUncertaintySampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "dal":
-        return DALSampler(train_data, labeller, label_model, revision_model, encoder)
+        return DALSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "abstain":
-        return AbstainSampler(train_data, labeller, label_model, revision_model, encoder)
+        return AbstainSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "disagreement":
-        return DisagreementSampler(train_data, labeller, label_model, revision_model, encoder)
+        return DisagreementSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "maxkl":
-        return MaxKLSampler(train_data, labeller,label_model, revision_model, encoder)
+        return MaxKLSampler(train_data, labeller,label_model, revision_model, encoder, seed=seed)
     else:
         raise ValueError(f"sampler {sampler_type} not implemented.")
 
@@ -153,12 +154,18 @@ def get_reviser(reviser_type, train_data, valid_data, encoder,  device, seed):
         raise ValueError(f"reviser {reviser_type} not implemented.")
 
 
-def score(y_true, y_pred, metric):
-    if metric == "acc":
-        score = accuracy_score(y_true, y_pred)
-    else:
-        raise ValueError(f"Metric {metric} not supported")
-    return score
+def evaluate_label_quality(labels, probs):
+    N = len(labels)
+    n_class = probs.shape[1]
+    labels = np.array(labels)
+    preds = np.argmax(probs, axis=1)
+    acc = accuracy_score(labels, preds)
+    # to prevent inf values, use laplace smoothing before evaluting nll
+    smoothed_probs = (probs + 1e-6) / (1 + 1e-6 * probs.shape[1])
+    nll = - np.log(smoothed_probs[np.arange(N), labels]).mean().item()
+    brier_score = (1 - 2 * probs[np.arange(N), labels] + np.sum(probs ** 2, axis=1)) / n_class
+    brier_score = brier_score.mean().item()
+    return acc, nll, brier_score
 
 
 def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labels, args, seed):
@@ -166,8 +173,10 @@ def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labe
     Evaluate the end model's performance after revising labels
     """
     seed_everything(seed, workers=True)
+    nan_pos = np.isnan(aggregated_soft_labels) # replace nan with uniform distribution
+    aggregated_soft_labels[nan_pos] = 1 / train_data.n_class
+    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, aggregated_soft_labels)
     aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
-    train_covered_acc = accuracy_score(train_data.labels, aggregated_hard_labels)
     end_model = get_end_model(args.end_model)
     n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
     evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
@@ -198,11 +207,14 @@ def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labe
             n_steps=n_steps,
             evaluation_step=evaluation_step
         )
-    em_test = end_model.test(test_data, args.metric, device=args.device)
+    test_acc = end_model.test(test_data, "acc", device=args.device)
+    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
     perf = {
-        "train_coverage": 1.0,
-        "train_covered_acc": train_covered_acc,
-        "em_test": em_test,
+        "label_acc": label_acc,
+        "label_nll": label_nll,
+        "label_brier": label_brier,
+        "test_acc": test_acc,
+        "test_f1": test_f1
     }
     return perf
 
@@ -223,11 +235,15 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
         n_steps=n_steps,
         evaluation_step=evaluation_step
     )
-    em_test = end_model.test(test_data, args.metric, device=args.device)
+
+    test_acc = end_model.test(test_data, "acc", device=args.device)
+    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
     perf = {
-        "train_coverage": 1.0,
-        "train_covered_acc": 1.0,
-        "em_test": em_test,
+        "label_acc": 1.0,
+        "label_nll": 0.0,
+        "label_brier": 0.0,
+        "test_acc": test_acc,
+        "test_f1": test_f1
     }
     return perf
 
@@ -237,12 +253,7 @@ def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
     # evaluate the performance of active learning with sampled ground truth labels
     seed_everything(seed, workers=True)
     if ground_truth_labels is None:
-        perf = {
-            "train_coverage": 0.0,
-            "train_covered_acc": 1.0,
-            "em_test": 0.0,
-        }
-        return perf
+        return None
 
     end_model = get_end_model(args.end_model)
     labeled_indices = np.nonzero(ground_truth_labels != ABSTAIN)[0]
@@ -257,7 +268,7 @@ def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
             y_valid=valid_data.labels,
             metric=args.metric,
             device=args.device,
-            verbose=True,
+            verbose=args.verbose,
             n_steps=n_steps,
             evaluation_step=evaluation_step
         )
@@ -267,15 +278,161 @@ def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
             y_train=labeled_train_data.labels,
             metric=args.metric,
             device=args.device,
-            verbose=True,
+            verbose=args.verbose,
             n_steps=n_steps,
             evaluation_step=evaluation_step
         )
-    em_test = end_model.test(test_data, args.metric, device=args.device)
+
+    train_probs = end_model.predict_proba(train_data, device=args.device)
+    uncertainty = entropy(train_probs, axis=1)
+    uncertainty_order = np.argsort(uncertainty)[::-1]
+    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, train_probs)
+    test_acc = end_model.test(test_data, "acc", device=args.device)
+    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
     perf = {
-        "train_coverage": len(labeled_train_data) / len(train_data),
-        "train_covered_acc": 1.0,
-        "em_test": em_test,
+        "label_acc": label_acc,
+        "label_nll": label_nll,
+        "label_brier": label_brier,
+        "test_acc": test_acc,
+        "test_f1": test_f1,
+        "uncertainty_order": uncertainty_order
+    }
+    return perf
+
+
+def evaluate_pl_performance(train_data, valid_data, test_data, args, seed,
+                            ground_truth_labels=None, threshold=0.8):
+    # evaluate the performance of semi-supervised learning using pseudo labelling
+    seed_everything(seed, workers=True)
+    if ground_truth_labels is None:
+        return None
+
+    end_model = get_end_model(args.end_model)
+    labeled_indices = np.nonzero(ground_truth_labels != ABSTAIN)[0]
+    labeled_train_data = train_data.create_subset(labeled_indices.tolist())
+    n_steps = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
+    if args.use_valid_labels:
+        end_model.fit(
+            dataset_train=labeled_train_data,
+            y_train=labeled_train_data.labels,
+            dataset_valid=valid_data,
+            y_valid=valid_data.labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+    else:
+        end_model.fit(
+            dataset_train=labeled_train_data,
+            y_train=labeled_train_data.labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+
+    train_probs = end_model.predict_proba(train_data, device=args.device)
+    pseudo_labels = np.argmax(train_probs, axis=1)
+    pseudo_labels[labeled_indices] = np.array(labeled_train_data.labels) # for labeled data, use provided labels
+    train_conf = np.max(train_probs, axis=1)
+    pl_indices = np.nonzero((train_conf >= threshold) | (ground_truth_labels != ABSTAIN))[0]
+    pl_labels = pseudo_labels[pl_indices]
+    pl_train_data = train_data.create_subset(pl_indices.tolist())
+
+    end_model = get_end_model(args.end_model)
+    n_steps = int(np.ceil(len(pl_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(pl_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
+    if args.use_valid_labels:
+        end_model.fit(
+            dataset_train=pl_train_data,
+            y_train=pl_labels,
+            dataset_valid=valid_data,
+            y_valid=valid_data.labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+    else:
+        end_model.fit(
+            dataset_train=pl_train_data,
+            y_train=pl_labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+    train_probs = end_model.predict_proba(train_data, device=args.device)
+    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, train_probs)
+    test_acc = end_model.test(test_data, "acc", device=args.device)
+    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
+    perf = {
+        "label_acc": label_acc,
+        "label_nll": label_nll,
+        "label_brier": label_brier,
+        "test_acc": test_acc,
+        "test_f1": test_f1,
+    }
+    return perf
+
+
+def evaluate_aw_performance(train_data, valid_data, test_data, args, seed,
+                            ground_truth_labels=None):
+    """
+    Evaluate Active WeaSuL's performance with ground truth labels
+    """
+    seed_everything(seed, workers=True)
+    label_model = get_label_model("aw", penalty_strength=args.penalty_strength)
+    label_model.fit(dataset_train=train_data, dataset_valid=valid_data, ground_truth_labels=ground_truth_labels)
+    aggregated_soft_labels = label_model.predict_proba(train_data)
+    nan_pos = np.isnan(aggregated_soft_labels)
+    aggregated_soft_labels[nan_pos] = 1 / train_data.n_class
+    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, aggregated_soft_labels)
+    aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
+    end_model = get_end_model(args.end_model)
+    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
+    if args.use_soft_labels:
+        aggregated_labels = aggregated_soft_labels
+    else:
+        aggregated_labels = aggregated_hard_labels
+
+    if args.use_valid_labels:
+        end_model.fit(
+            dataset_train=train_data,
+            y_train=aggregated_labels,
+            dataset_valid=valid_data,
+            y_valid=valid_data.labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+    else:
+        end_model.fit(
+            dataset_train=train_data,
+            y_train=aggregated_labels,
+            metric=args.metric,
+            device=args.device,
+            verbose=args.verbose,
+            n_steps=n_steps,
+            evaluation_step=evaluation_step
+        )
+    test_acc = end_model.test(test_data, "acc", device=args.device)
+    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
+    perf = {
+        "label_acc": label_acc,
+        "label_nll": label_nll,
+        "label_brier": label_brier,
+        "test_acc": test_acc,
+        "test_f1": test_f1
     }
     return perf
 
@@ -340,14 +497,14 @@ def plot_dpal_results(results_list, figure_path, dataset, nametag, plot_labeled_
         "n_labeled": [],  # number of expert labeled data
         "frac_labeled": [],  # fraction of expert labeled data
         "al_label_acc": [],  # AL label accuracy
-        "al_active_frac": [],  # fraction of data following dp prediction
-        "dp_active_acc": [],  # DP label accuracy on active region
-        "al_active_acc": [],  # AL label accuracy on active region
-        "dpal_label_acc": [],  # DPAL label accuracy
-        "em_test": [],  # end model's test performance
-        "em_test_al": [],  # end model's test accuracy when using active learning
         "dp_label_acc": [],  # DP label accuracy
-        "em_test_golden": []  # end model's test performance using golden labels
+        "dpal_label_acc": [],  # DPAL label accuracy
+        "dpal_test_acc": [],  # end model's test accuracy
+        "dpal_test_f1": [],  # end model's test f1 score
+        "al_test_acc": [],  # active learning model's test accuracy
+        "al_test_f1": [],  # active learning model's test f1
+        "golden_test_acc": [],  # end model's test accuracy using golden labels
+        "golden_test_f1": [],   # end model's test f1 using golden labels
     }
     for i in range(n_run):
         for key in res:
@@ -388,8 +545,8 @@ def plot_dpal_results(results_list, figure_path, dataset, nametag, plot_labeled_
     fig.savefig(train_fig_path)
 
     fig2, ax2 = plt.subplots()
-    y = res["em_test"][:,0].mean()
-    y_stderr = res["em_test"][:,0].std() / np.sqrt(n_run)
+    y = res["test_acc"][:,0].mean()
+    y_stderr = res["test_acc"][:,0].std() / np.sqrt(n_run)
     ax2.plot(x, np.repeat(y, len(x)), label="DP test accuracy", c="b")
     ax2.fill_between(x, np.repeat(y - 1.96 * y_stderr, len(x)), np.repeat(y + 1.96 * y_stderr, len(x)), alpha=.1,
                     color="b")
@@ -412,167 +569,3 @@ def plot_dpal_results(results_list, figure_path, dataset, nametag, plot_labeled_
     ax2.legend()
     test_fig_path = os.path.join(dirname, nametag + "_TestAcc.jpg")
     fig2.savefig(test_fig_path)
-
-
-def compare_baseline_performance(filepaths, dataset, tag,
-                                 output_dir="output/",
-                                 plot_labeled_frac=False):
-    """
-    Compare the performance with baselines (nashaat, active weasul, weak supervision, active learning)
-    :param figure_paths: dictionary that maps method name to json file path
-    :param dataset: dataset name
-    :param tag: experiment tag
-    :param plot_labeled_frac: plot labeled frac or labeled size on x axis
-    :return:
-    """
-    res = {}
-    runtimes = []
-    methods = []
-    # get the result of ReLieF
-    for method in filepaths:
-        filepath = filepaths[method]
-        if not os.path.exists(filepath):
-            raise Exception(f"Filepath {filepath} not found.")
-
-        methods.append(method)
-        infile = open(filepath, "r")
-        results = json.load(infile)
-        results_list = results["data"]
-        n_run = len(results_list)
-        em_test = []
-        em_test_golden = []
-        runtime = []
-        for i in range(n_run):
-            em_test.append(results_list[i]["em_test"])
-            em_test_golden.append(results_list[i]["em_test_golden"])
-            runtime.append(results_list[i]["time"])
-
-        res[method] = np.array(em_test)
-        runtimes.append(np.array(runtime).mean())
-        if method == "ReLieF":
-            golden_performance = np.array(em_test_golden).mean()
-            pws_performance = np.mean(res[method][:,0])  # initial weak supervision performance
-            if plot_labeled_frac:
-                x = results_list[0]["frac_labeled"]
-            else:
-                x = results_list[0]["n_labeled"]
-
-    fig, ax = plt.subplots()
-    color_map = {
-        0: "red",
-        1: "green",
-        2: "yellow",
-        3: "blue",
-        4: "purple",
-        5: "lime",
-        6: "orange",
-    }
-    i = 0
-    for method in res:
-        y = res[method].mean(axis=0)
-        y_stderr = res[method].std(axis=0) / np.sqrt(n_run)
-        ax.plot(x, y, label=method, color=color_map[i])
-        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color=color_map[i])
-        i = (i + 1) % len(color_map)
-
-    ax.axhline(y=golden_performance, color='k', linestyle='--', label="Golden Labels")
-    y = np.repeat(pws_performance, len(x))
-    ax.plot(x,y, label="Weak Supervision", color=color_map[i])
-    ax.set_xlabel("label budget")
-    ax.set_ylabel("test accuracy")
-    ax.set_title(dataset)
-    ax.legend()
-    fig_path = Path(output_dir) / dataset / f"{tag}_BaselineCmp.jpg"
-    fig.savefig(fig_path)
-    # plot runtime
-    fig2, ax2 = plt.subplots()
-    bars = ax2.bar(methods, runtimes, tick_label=methods)
-    ax2.bar_label(bars)
-    ax2.set_xlabel("Methods")
-    ax2.set_ylabel("Runtime (Sec)")
-    ax2.set_title(dataset)
-    fig_path = Path(output_dir) / dataset / f"{tag}_BaselineTime.jpg"
-    fig2.savefig(fig_path)
-
-
-def compare_em_performance(figure_path, dataset, label_model, end_model, revision_model_list, sampler_list,
-                           cost_list, tag, plot_labeled_frac=False):
-    """
-    Compare end model performance with different settings.
-    Only ONE of revision_model_list, sampler_list, cost_list should include multiple items
-    :param figure_path:
-    :param dataset:
-    :param label_model:
-    :param end_model:
-    :param revision_model_list:
-    :param sampler_list:
-    :param cost_list:
-    :param tag:
-    :param plot_labeled_frac:
-    :return:
-    """
-    res = {}
-    golden_res = 0
-    for rm in revision_model_list:
-        for sampler in sampler_list:
-            for cost in cost_list:
-                if len(revision_model_list) > 1:
-                    method = rm
-                elif len(sampler_list) > 1:
-                    method = sampler
-                else:
-                    method = cost
-
-                filepath = Path(figure_path) / dataset / f"{label_model}_{end_model}_{rm}_{sampler}_{cost}_{tag}.json"
-                infile = open(filepath, "r")
-                results = json.load(infile)
-                results_list =results["data"]
-                n_run = len(results_list)
-                em_test = []
-                em_test_golden = []
-                for i in range(n_run):
-                    em_test.append(results_list[i]["em_test"])
-                    em_test_golden.append(results_list[i]["em_test_golden"])
-
-                res[method] = np.array(em_test)
-                golden_res = np.array(em_test_golden).mean()
-                if plot_labeled_frac:
-                    x = results_list[0]["frac_labeled"]
-                else:
-                    x = results_list[0]["n_labeled"]
-
-    fig, ax = plt.subplots()
-    color_map = {
-        0: "red",
-        1: "green",
-        2: "yellow",
-        3: "blue",
-        4: "cyan",
-        5: "purple",
-        6: "orange",
-        7: "lime",
-        8: "violet",
-        9: "navy",
-        10: "grey"
-    }
-    i = 0
-    for method in res:
-        y = res[method].mean(axis=0)
-        y_stderr = res[method].std(axis=0) / np.sqrt(n_run)
-        ax.plot(x, y, label=method, color=color_map[i])
-        ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color=color_map[i])
-        i = (i+1) % len(color_map)
-
-    ax.axhline(y=golden_res, color='k', linestyle='--')
-    ax.set_xlabel("label budget")
-    ax.set_ylabel("test accuracy")
-    ax.set_title(f"{dataset}")
-    ax.legend()
-    if len(revision_model_list) > 1:
-        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_ReviserCmp.jpg"
-    elif len(sampler_list) > 1:
-        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_SamplerCmp.jpg"
-    else:
-        fig_path = Path(figure_path) / dataset / f"{label_model}-{end_model}_{tag}_CostCmp.jpg"
-
-    fig.savefig(fig_path)
