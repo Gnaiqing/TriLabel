@@ -7,5 +7,5 @@ Token: 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
 05: pipeline update. Now use Bayes' Theorem as theoretical background and support multiple ways to combine AL with DP.
 06: add F1 score metric. Update result structure.
 07: Use F1 score for model selection. Use metal as label model. Set maximum sample size to 5 percent. Change prediction
-results on labeled data to label results. Use different aggregation method on different datasets. Use uncertainty sampling
-on aggregation result as default strategy.
+results on labeled data to label results. Use uncertainty sampling on aggregation result as default strategy.
+08: Set maximum dimension to 300. Add batch sampling methods.

@@ -3,6 +3,7 @@ import os
 dataset_list = [
     ## text datasets
     "youtube",
+    "sms",
     "imdb",
     "yelp",
     ## tabular datasets
@@ -13,14 +14,19 @@ dataset_list = [
     # "tennis",
     # "basketball",
     ## multiclass datasets
-    "trec",
-    "agnews"
+    # "trec",
+    # "agnews",
+    ## relation datasets
+    # "spouse",
+    # "cdr",
+    # "semeval",
+    # "chemprot"
 ]
 
-bert_embedding_datasets = ["youtube", "imdb", "yelp", "trec", "agnews"]
+bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
+tag = "09"
 label_model_list = ["metal"]
-tag = "07"
-test_mode = True
+test_mode = False
 for dataset in dataset_list:
     for lm in label_model_list:
         if dataset in bert_embedding_datasets:
@@ -28,10 +34,10 @@ for dataset in dataset_list:
         else:
             ext = ""
 
-        # evaluate the effect of ensemble size, bootstrap and select features
-        for sampler in ["passive", "uncertain", "uncertain-rm", "dal", "uncertain-joint"]:
-            cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --sampler {sampler} " \
-                  f"--label_model {lm} --use_valid_labels --use_soft_labels --repeats 20 --tag {tag}"
+        # evaluate the effect of sampler
+        for sampler in ["passive", "uncertain", "uncertain-rm", "dal", "cluster-margin"]:
+            cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --max_dim 300 --sampler {sampler} " \
+                  f"--label_model {lm} --use_valid_labels --use_soft_labels --repeats 10 --tag {tag}"
             print(cmd)
             os.system(cmd)
 

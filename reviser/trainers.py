@@ -15,7 +15,6 @@ class NeuralNetworkTrainer:
         self.batch_size = batch_size
         # Early stopping to avoid overfitting
         self.early_stopping_patience = None
-        # self.id = np.random.randint(1,1000000)
 
     def compute_loss(self, network_output, y_data, which_loss):
         if which_loss == 'cross-entropy':
@@ -121,38 +120,34 @@ class NeuralNetworkTrainer:
         return self.model
 
 
-class CostSensitiveNetworkTrainer(NeuralNetworkTrainer):
-    def __init__(self, model,
-                 cost,
-                 num_training_iterations=1000,
-                 lr=1e-2,
-                 batch_size=256,
-                 ):
-        super(CostSensitiveNetworkTrainer, self).__init__(model, num_training_iterations, lr, batch_size)
-        self.cost = cost
-
-    def compute_loss(self, network_output, y_data, which_loss):
-        if which_loss == "cross-entropy":
-            loss_func = torch.nn.CrossEntropyLoss()
-            loss = loss_func(network_output, y_data)
-        elif which_loss == "cs-sigmoid":
-            phi = torch.sigmoid(-network_output)
-            phi_neg = torch.sigmoid(network_output)
-            phi_y = torch.gather(phi, 1, y_data.view(-1,1))
-            phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1,1))
-            loss = self.cost * phi_y + (1-self.cost) * (torch.sum(phi_neg, dim=1).view(-1,1) - phi_neg_y)
-            loss = loss.mean()
-        elif which_loss == "cs-hinge":
-            phi = torch.relu(1-network_output)
-            phi_neg = torch.relu(1+network_output)
-            phi_y = torch.gather(phi, 1, y_data.view(-1, 1))
-            phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1, 1))
-            loss = self.cost * phi_y + (1 - self.cost) * (torch.sum(phi_neg, dim=1).view(-1, 1) - phi_neg_y)
-            loss = loss.mean()
-        else:
-            raise NotImplementedError("Loss choice not valid or Loss not implemented!")
-        return loss
-
-
-
-
+# class CostSensitiveNetworkTrainer(NeuralNetworkTrainer):
+#     def __init__(self, model,
+#                  cost,
+#                  num_training_iterations=1000,
+#                  lr=1e-2,
+#                  batch_size=256,
+#                  ):
+#         super(CostSensitiveNetworkTrainer, self).__init__(model, num_training_iterations, lr, batch_size)
+#         self.cost = cost
+#
+#     def compute_loss(self, network_output, y_data, which_loss):
+#         if which_loss == "cross-entropy":
+#             loss_func = torch.nn.CrossEntropyLoss()
+#             loss = loss_func(network_output, y_data)
+#         elif which_loss == "cs-sigmoid":
+#             phi = torch.sigmoid(-network_output)
+#             phi_neg = torch.sigmoid(network_output)
+#             phi_y = torch.gather(phi, 1, y_data.view(-1,1))
+#             phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1,1))
+#             loss = self.cost * phi_y + (1-self.cost) * (torch.sum(phi_neg, dim=1).view(-1,1) - phi_neg_y)
+#             loss = loss.mean()
+#         elif which_loss == "cs-hinge":
+#             phi = torch.relu(1-network_output)
+#             phi_neg = torch.relu(1+network_output)
+#             phi_y = torch.gather(phi, 1, y_data.view(-1, 1))
+#             phi_neg_y = torch.gather(phi_neg, 1, y_data.view(-1, 1))
+#             loss = self.cost * phi_y + (1 - self.cost) * (torch.sum(phi_neg, dim=1).view(-1, 1) - phi_neg_y)
+#             loss = loss.mean()
+#         else:
+#             raise NotImplementedError("Loss choice not valid or Loss not implemented!")
+#         return loss

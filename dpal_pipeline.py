@@ -1,15 +1,13 @@
-import sys
-from pathlib import Path
-import json
 import argparse
 import time
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
+from sklearn.decomposition import PCA
 from labeller.labeller import get_labeller
 import numpy as np
 from calibrator.lm_ensemble import EnsembleCalibrator
 from sklearn.metrics import accuracy_score
 from utils import evaluate_performance, save_results, evaluate_golden_performance, get_sampler, \
-     get_reviser, ABSTAIN, plot_dpal_results, evaluate_label_quality
+     get_reviser, ABSTAIN, evaluate_label_quality
 
 
 def update_results(results, n_labeled, frac_labeled,
@@ -58,8 +56,6 @@ def run_dpal(train_data, valid_data, test_data, args, seed):
         "dp_active_frac": [],  # fraction of data where prediction result follow DP but not AL
         "dpal_test_acc": [],  # end model's test accuracy
         "dpal_test_f1": [],  # end model's test f1
-        "al_test_acc": [],  # test accuracy using active learning
-        "al_test_f1": [],  # test f1 score using active learning
         "golden_test_acc": np.nan,  # end model's test accuracy using golden labels
         "golden_test_f1": np.nan   # end model's test f1 using golden labels
     }
@@ -155,7 +151,7 @@ def run_dpal(train_data, valid_data, test_data, args, seed):
 
         perf = evaluate_performance(train_data, valid_data, test_data, aggregated_labels, args, seed)
         n_labeled = sampler.get_n_sampled()
-        sampler.update_stats(train_data, label_model=lm_calib, revision_model=reviser, encoder=encoder)
+        sampler.update_stats(train_data, label_model=lm_calib, revision_model=reviser)
         frac_labeled = n_labeled / len(train_data)
         update_results(results, n_labeled=n_labeled, frac_labeled=frac_labeled,
                        dpal_label_acc=acc, dpal_label_nll=nll, dpal_label_brier=brier,
@@ -185,16 +181,18 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="youtube")
     parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
+    parser.add_argument("--max_dim", type=int, default=None)
     # sampler
-    parser.add_argument("--sampler", type=str, default="uncertain-joint")
+    parser.add_argument("--sampler", type=str, default="passive")
     parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
-    # uncertainty estimation for label model and active learning model
+    # uncertainty estimation for label model
     parser.add_argument("--lm_ensemble_size", type=int, default=10)
     parser.add_argument("--bootstrap", action="store_true")
     parser.add_argument("--LF_selected_size", type=str, default="auto")
+    # active learning model
     parser.add_argument("--revision_model", type=str, default="ensemble")
-    # DPAL aggregation method
+    # aggregation method
     parser.add_argument("--aggregation_method", type=str, choices=["bayesian", "average", "weighted", "confidence"],
                         default="bayesian")
     # label model and end models
@@ -211,7 +209,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--tag", type=str, default="test")
-    parser.add_argument("--load_results", action="store_true")
     args = parser.parse_args()
     calibration_tag = ""
     if args.lm_ensemble_size > 1:
@@ -221,27 +218,23 @@ if __name__ == "__main__":
     if args.bootstrap:
         calibration_tag += "B"
 
-    if args.load_results:
-        id_tag = f"dpal_{args.label_model}_{args.end_model}_{args.aggregation_method}_{args.sampler}_{args.tag}"
-        filepath = Path(args.output_path) / args.dataset / f"{id_tag}.json"
-        readfile = open(filepath, "r")
-        results = json.load(readfile)
-        results_list = results["data"]
-        plot_labeled_frac = args.sample_budget < 1
-        plot_dpal_results(results_list, args.output_path, args.dataset, id_tag, plot_labeled_frac)
-        sys.exit(0)
-
     if args.dataset[:3] == "syn":
         train_data, valid_data, test_data = load_synthetic_dataset(args.dataset)
     else:
         train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
 
+    if args.max_dim is not None and train_data.features.shape[1] > args.max_dim:
+        # use truncated SVD to reduce feature dimensions
+        pca = PCA(n_components=args.max_dim)
+        pca.fit(train_data.features)
+        train_data.features = pca.transform(train_data.features)
+        valid_data.features = pca.transform(valid_data.features)
+        test_data.features = pca.transform(test_data.features)
+
     if args.sample_budget < 1:
-        plot_labeled_frac = True
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
         args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
     else:
-        plot_labeled_frac = False
         args.sample_budget = int(args.sample_budget)
         args.sample_per_iter = int(args.sample_per_iter)
 
@@ -282,7 +275,6 @@ if __name__ == "__main__":
         results_list.append(results)
 
     id_tag = f"dpal_{args.label_model}_{args.end_model}_{args.aggregation_method}_{args.sampler}_{calibration_tag}_{args.tag}"
-
     save_results(results_list, args.output_path, args.dataset, f"{id_tag}.json")
 
 

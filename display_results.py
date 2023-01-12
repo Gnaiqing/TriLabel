@@ -77,7 +77,7 @@ if __name__ == "__main__":
     parser.add_argument("--label_model", type=str, default="metal")
     parser.add_argument("--end_model", type=str, default="mlp")
     parser.add_argument("--aggregation", type=str, default="bayesian")
-    parser.add_argument("--sampler", type=str, default="uncertain-joint")
+    parser.add_argument("--sampler", type=str, default="passive")
     parser.add_argument("--tag", type=str, default="07")
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--plot_results", action="store_true")
@@ -90,7 +90,7 @@ if __name__ == "__main__":
         if args.ablation is None:
             for method in args.method:
                 if method == "dpal":
-                    id_tag = f"{method}_{args.label_model}_{args.end_model}_{args.aggregation}_{args.sampler}_E_{args.tag}"
+                    id_tag = f"{method}_{args.label_model}_{args.end_model}_{args.aggregation}_{args.sampler}_EF_{args.tag}"
                 elif method == "nashaat":
                     id_tag = f"{method}_{args.label_model}_uncertain_{args.tag}"
                 else:
@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
         elif args.ablation == "sampler":
             method = "dpal"
-            for sampler in ["passive", "uncertain", "uncertain-rm" ,"dal", "uncertain-joint"]:
+            for sampler in ["passive", "uncertain", "uncertain-rm","dal", "cluster-margin"]:
                 id_tag = f"{method}_{args.label_model}_{args.end_model}_{args.aggregation}_{sampler}_EF_{args.tag}"
                 filepath = Path(args.output_path) / dataset / f"{id_tag}.json"
                 if os.path.exists(filepath):

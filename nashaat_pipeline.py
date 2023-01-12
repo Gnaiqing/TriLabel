@@ -2,6 +2,7 @@ import argparse
 import time
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from labeller.labeller import get_labeller
+from sklearn.decomposition import PCA
 import numpy as np
 import copy
 from utils import evaluate_performance, get_label_model, save_results, evaluate_golden_performance, get_sampler
@@ -96,6 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="spambase")
     parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
+    parser.add_argument("--max_dim", type=int, default=None)
     # sampler
     parser.add_argument("--sampler", type=str, default="uncertain")
     parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
@@ -120,6 +122,14 @@ if __name__ == "__main__":
         train_data, valid_data, test_data = load_synthetic_dataset(args.dataset)
     else:
         train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
+
+    if args.max_dim is not None and train_data.features.shape[1] > args.max_dim:
+        # use truncated SVD to reduce feature dimensions
+        pca = PCA(n_components=args.max_dim)
+        pca.fit(train_data.features)
+        train_data.features = pca.transform(train_data.features)
+        valid_data.features = pca.transform(valid_data.features)
+        test_data.features = pca.transform(test_data.features)
 
     if args.sample_budget < 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)

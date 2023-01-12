@@ -34,16 +34,13 @@ class BaseSampler:
     def sample_distinct(self, n=1):
         raise NotImplementedError()
 
-    def update_stats(self, train_data, label_model=None, revision_model=None, encoder=None):
+    def update_stats(self, train_data, label_model=None, revision_model=None):
         self.train_data = train_data
         self.weak_labels = np.array(train_data.weak_labels)
-        self.label_model = label_model
-        self.revision_model = revision_model
-        self.encoder = encoder
-        if encoder is None:
-            self.rep = self.train_data.features
-        else:
-            self.rep = self.encoder(torch.tensor(self.train_data.features)).detach().cpu().numpy()
+        if label_model is not None:
+            self.label_model = label_model
+        if revision_model is not None:
+            self.revision_model = revision_model
         self.candidate_indices = np.nonzero(~self.sampled)[0]
 
     def label_selected_indices(self, indices):

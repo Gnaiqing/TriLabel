@@ -66,15 +66,28 @@ class MLPNet(BaseNetwork):
                  input_dim=1,
                  output_dim=1):
         super(MLPNet, self).__init__(n_neurons, activation, input_dim, output_dim)
-        self.net = torch.nn.Sequential(
-            torch.nn.Linear(input_dim, n_neurons),
-            self.act_func,
-            torch.nn.Linear(n_neurons, output_dim)
-        )
+        self.fc1 = torch.nn.Linear(input_dim, n_neurons)
+        self.fc2 = torch.nn.Linear(n_neurons, output_dim)
+        self._features = None  # outputs of penultimate layer (for Cluster-Margin sampling)
+        self._grad = {}  # gradient for parameters of last layer (for BADGE sampling)
+        self.fc1.register_forward_hook(self.feature_hook)
+        self.fc2.weight.register_hook(self.record_grad("weight"))
+        self.fc2.bias.register_hook(self.record_grad("bias"))
 
     def forward(self, x):
-        f = self.net(x)
+        f = self.fc1(x)
+        f = F.relu(f)
+        f = self.fc2(f)
         return f
+
+    def feature_hook(self, module, input, output):
+        self._features = output.detach()
+
+    def record_grad(self, param_name):
+        def grad_hook(grad):
+            self._grad[param_name] = grad.detach()
+
+        return grad_hook
 
     def inference_forward(self, x, **kwargs):
         self.eval()

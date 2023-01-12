@@ -32,6 +32,14 @@ class EnsembleReviser(BaseReviser):
             trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
             self.clf.append(clf)
 
+        if self._features is None:
+            self._features = []
+            self.predict_proba(self.train_data)
+            for i in range(M):
+                self._features.append(self.clf[i]._features.cpu().numpy())
+
+            self._features = np.mean(self._features, axis=0)
+
     def predict_proba(self, dataset):
         if self.clf is None:
             return np.ones((len(dataset), dataset.n_class)) / dataset.n_class
@@ -45,5 +53,32 @@ class EnsembleReviser(BaseReviser):
         proba = np.stack(proba_list, axis=0)
         proba = proba.mean(axis=0)
         return proba
+
+    def get_pseudo_grads(self, dataset):
+        preds = self.predict(dataset)
+        X = torch.tensor(self.get_feature(dataset)).to(self.device)
+        y_hat = torch.tensor(preds).to(self.device)
+        M = len(self.clf)
+        N = X.shape[0]
+        grads_list = []
+
+        loss_func = torch.nn.CrossEntropyLoss()
+        for i in range(M):
+            optimizer = torch.optim.Adam(self.clf[i].parameters())  # used for clear gradient
+            cur_grads = []
+            for j in range(N):
+                optimizer.zero_grad()
+                output = self.clf[i](X[j,:])
+                loss = loss_func(output, y_hat[j])
+                loss.backward()
+                cur_grads.append(self.clf[i].fc2.weight.grad.detach().cpu().numpy().flatten())
+
+            cur_grads = np.vstack(cur_grads)
+            grads_list.append(cur_grads)
+
+        grads = np.mean(grads_list, axis=0)
+        return grads
+
+
 
 

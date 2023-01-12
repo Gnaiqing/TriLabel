@@ -1,7 +1,4 @@
-from wrench.dataset.utils import check_weak_labels
 import numpy as np
-from utils import ABSTAIN
-import copy
 import torch
 
 
@@ -13,7 +10,7 @@ class BaseReviser:
                  valid_data=None,
                  seed=None):
         """
-        Initialize LF Reviser
+        Initialize Reviser (active learning model)
         :param train_data: dataset to revise
         :param encoder: trained encoder model for feature transformation
         :param valid_data: validation dataset with golden labels
@@ -26,17 +23,11 @@ class BaseReviser:
         self.train_rep = self.get_feature(self.train_data)
         self.device = device
         self.seed = seed
-        self.margin = 0.1
         self.clf = None
+        self._features = None  # used by cluster margin sampler
+        self._grads = None  # used by BADGE sampler
         self.sampled_indices = None
         self.sampled_labels = None
-
-    def update_encoder(self, encoder):
-        self.encoder = encoder
-
-    def update_dataset(self, revised_train_data, revised_valid_data=None):
-        self.train_data = revised_train_data
-        self.valid_data = revised_valid_data
 
     def get_feature(self, dataset):
         if self.encoder is not None:
@@ -50,15 +41,19 @@ class BaseReviser:
         """
         raise NotImplementedError
 
+    def get_pseudo_grads(self, dataset):
+        """
+        Get the pseudo gradient of data which is used by BADGE sampler
+        """
+        raise NotImplementedError
+
     def predict(self, dataset):
         """
         Predict labels for dataset with abstention
         :param dataset: dataset to predict
         """
         proba = self.predict_proba(dataset)
-        reject_indices = np.max(proba, axis=1) < 1 / dataset.n_class + self.margin
         preds = np.argmax(proba, axis=1)
-        preds[reject_indices] = ABSTAIN
         return preds
 
     def predict_proba(self, dataset):
@@ -67,20 +62,3 @@ class BaseReviser:
         :param dataset: dataset to predict
         """
         raise NotImplementedError
-
-    def get_revised_dataset(self, dataset, y_pred):
-        """
-        Revise dataset's weak labels using predicted labels
-        :param dataset: dataset to revise
-        :param labels: labels to revise. ABSTAIN means do not revise specific weak labels
-        :return: revised dataset
-        """
-        revised_dataset = copy.copy(dataset)
-        revised_weak_labels = check_weak_labels(dataset)
-        # correct all weak labels using predicted labels
-        for lf_idx in range(dataset.n_lf):
-            correct_mask = y_pred != ABSTAIN
-            revised_weak_labels[correct_mask, lf_idx] = y_pred[correct_mask]
-
-        revised_dataset.weak_labels = revised_weak_labels.tolist()
-        return revised_dataset

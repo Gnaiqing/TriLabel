@@ -2,11 +2,12 @@
 import sys
 import time
 import argparse
+from sklearn.decomposition import PCA
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from labeller.labeller import get_labeller
 import numpy as np
 from utils import evaluate_al_performance, save_results, evaluate_golden_performance, \
-    get_sampler, get_label_model, get_reviser, ABSTAIN
+    get_sampler, ABSTAIN
 
 
 def update_results(results, n_labeled, frac_labeled, al_label_acc, al_label_nll,
@@ -88,6 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="spambase")
     parser.add_argument("--dataset_path", type=str, default="../datasets/")
     parser.add_argument("--extract_fn", type=str, default=None)  # method used to extract features
+    parser.add_argument("--max_dim", type=int, default=None)
     # sampler
     parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
@@ -111,12 +113,18 @@ if __name__ == "__main__":
     else:
         train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
 
+    if args.max_dim is not None and train_data.features.shape[1] > args.max_dim:
+        # use truncated SVD to reduce feature dimensions
+        pca = PCA(n_components=args.max_dim)
+        pca.fit(train_data.features)
+        train_data.features = pca.transform(train_data.features)
+        valid_data.features = pca.transform(valid_data.features)
+        test_data.features = pca.transform(test_data.features)
+
     if args.sample_budget < 1:
-        plot_labeled_frac = True
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
         args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
     else:
-        plot_labeled_frac = False
         args.sample_budget = int(args.sample_budget)
         args.sample_per_iter = int(args.sample_per_iter)
 

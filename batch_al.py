@@ -2,10 +2,10 @@ import os
 
 dataset_list = [
     ## text datasets
-    # "youtube",
-    # "sms",
-    # "imdb",
-    # "yelp",
+    "youtube",
+    "sms",
+    "imdb",
+    "yelp",
     ## tabular datasets
     # "PhishingWebsites",
     # "bank-marketing",
@@ -17,14 +17,14 @@ dataset_list = [
     # "trec",
     # "agnews",
     ## relation datasets
-    "spouse",
-    "cdr",
-    "semeval",
-    "chemprot"
+    # "spouse",
+    # "cdr",
+    # "semeval",
+    # "chemprot"
 ]
 
 bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
-tag = "07"
+tag = "08"
 test_mode = False
 for dataset in dataset_list:
     if dataset in bert_embedding_datasets:
@@ -32,7 +32,7 @@ for dataset in dataset_list:
     else:
         ext = ""
 
-    cmd = f"python al_pipeline.py --dataset {dataset} {ext} --use_valid_labels --use_soft_labels --tag {tag}"
+    cmd = f"python al_pipeline.py --dataset {dataset} {ext} --max_dim 300 --use_valid_labels --use_soft_labels --tag {tag}"
     print(cmd)
     os.system(cmd)
 

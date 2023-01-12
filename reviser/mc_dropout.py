@@ -13,7 +13,7 @@ class MCDropoutReviser(BaseReviser):
     """
     Use MC Dropout to estimate uncertainty
     """
-    def train_revision_model(self, indices, labels, cost):
+    def train_revision_model(self, indices, labels):
         self.clf = DropOutNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
         trainer = NeuralNetworkTrainer(self.clf)
         X_sampled = self.get_feature(self.train_data)[indices, :]

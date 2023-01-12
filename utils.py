@@ -113,8 +113,8 @@ def get_end_model(model_type):
 
 
 def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder, seed=None):
-    from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, \
-        RmUncertaintySampler, DALSampler, DisagreementSampler, AbstainSampler, JointUncertaintySampler
+    from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, CoreSetSampler, \
+        RmUncertaintySampler, DALSampler, JointUncertaintySampler, ClusterMarginSampler, BadgeSampler
     if sampler_type == "passive":
         return PassiveSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "uncertain":
@@ -125,19 +125,21 @@ def get_sampler(sampler_type, train_data, labeller, label_model, revision_model,
         return JointUncertaintySampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "dal":
         return DALSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
-    elif sampler_type == "abstain":
-        return AbstainSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
-    elif sampler_type == "disagreement":
-        return DisagreementSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
+    elif sampler_type == "cluster-margin":
+        return ClusterMarginSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     elif sampler_type == "maxkl":
         return MaxKLSampler(train_data, labeller,label_model, revision_model, encoder, seed=seed)
+    elif sampler_type == "badge":
+        return BadgeSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
+    elif sampler_type == "coreset":
+        return CoreSetSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed)
     else:
         raise ValueError(f"sampler {sampler_type} not implemented.")
 
 
 def get_reviser(reviser_type, train_data, valid_data, encoder,  device, seed):
     from reviser import EnsembleReviser, ExpertLabelReviser, MCDropoutReviser, \
-        MLPReviser, MLPTempReviser, DalenReviser
+        MLPReviser, MLPTempReviser
     if reviser_type == "mlp":
         return MLPReviser(train_data, encoder, device, valid_data, seed)
     elif reviser_type == "mlp-temp":
@@ -148,8 +150,6 @@ def get_reviser(reviser_type, train_data, valid_data, encoder,  device, seed):
         return ExpertLabelReviser(train_data, encoder, device, valid_data, seed)
     elif reviser_type == "mc-dropout":
         return MCDropoutReviser(train_data, encoder, device, valid_data, seed)
-    elif reviser_type == "dalen":
-        return DalenReviser(train_data, encoder, device, valid_data, seed)
     else:
         raise ValueError(f"reviser {reviser_type} not implemented.")
 

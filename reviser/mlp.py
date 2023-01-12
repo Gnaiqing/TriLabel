@@ -25,6 +25,10 @@ class MLPReviser(BaseReviser):
 
         trainer.train_model_with_dataloader(training_dataset, eval_dataset, device=self.device)
 
+        self.predict_proba(self.train_data)
+        if self._features is None:
+            self._features = self.clf._features.cpu().numpy()
+
     def predict_proba(self, dataset):
         if self.clf is None:
             return np.ones((len(dataset), dataset.n_class)) / dataset.n_class
@@ -32,4 +36,14 @@ class MLPReviser(BaseReviser):
         proba = self.clf.predict_proba(X)
         return proba
 
+    def get_pseudo_grads(self, dataset):
+        preds = self.predict(dataset)
+        X = torch.tensor(self.get_feature(dataset)).to(self.device)
+        y_hat = torch.tensor(preds).to(self.device)
+        loss_func = torch.nn.CrossEntropyLoss()
+        output = self.clf(X)
+        loss = loss_func(output, y_hat)
+        loss.backward()
+        grads = self.clf.fc2.weight.grad.detach().cpu().numpy().flatten()
+        return grads
 
