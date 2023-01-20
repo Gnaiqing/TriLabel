@@ -172,13 +172,3 @@ if __name__ == "__main__":
         print(f"NLL: {nll_list.mean():.3f}({nll_list.std():.3f})")
         print(f"Brier Score: {brier_list.mean():.3f}({brier_list.std():.3f})")
         print(f"ECE: {ece_list.mean():.3f}({ece_list.std():.3f})")
-
-
-
-
-
-
-
-
-
-

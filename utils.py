@@ -1,20 +1,39 @@
 import numpy as np
 from wrench.labelmodel import Snorkel, DawidSkene, MajorityVoting, MeTaL
-from active_weasul.label_model import LabelModel
-from wrench.endmodel import EndClassifierModel, LogRegModel, Cosine
-from sklearn.manifold import TSNE
+from baselines.active_weasul.label_model import LabelModel
+from wrench.endmodel import EndClassifierModel, Cosine
+from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-from numpy.random import default_rng
 from pytorch_lightning import seed_everything
 from pathlib import Path
-from scipy.stats import entropy
-import os
 import json
 
 ABSTAIN = -1
+
+
+def preprocess_data(args):
+    if args.dataset[:3] == "syn":
+        train_data, valid_data, test_data = load_synthetic_dataset(args.dataset)
+    else:
+        train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
+
+    if args.max_dim is not None and train_data.features.shape[1] > args.max_dim:
+        # use truncated SVD to reduce feature dimensions
+        pca = PCA(n_components=args.max_dim)
+        pca.fit(train_data.features)
+        train_data.features = pca.transform(train_data.features)
+        valid_data.features = pca.transform(valid_data.features)
+        test_data.features = pca.transform(test_data.features)
+
+    if args.sample_budget < 1:
+        args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
+        args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
+    else:
+        args.sample_budget = int(args.sample_budget)
+        args.sample_per_iter = int(args.sample_per_iter)
+
+    return train_data, valid_data, test_data
 
 
 def get_label_model(model_type, **kwargs):
@@ -46,12 +65,6 @@ def get_end_model(model_type):
             optimizer="Adam",
             optimizer_lr=1e-2,
             optimizer_weight_decay=1e-5
-        )
-    elif model_type == "logistic":
-        end_model = LogRegModel(
-            lr=1e-2,
-            batch_size=512,
-            test_batch_size=512
         )
     elif model_type == "bert":
         end_model = EndClassifierModel(
@@ -112,7 +125,7 @@ def get_end_model(model_type):
     return end_model
 
 
-def get_sampler(sampler_type, train_data, labeller, label_model, revision_model, encoder, seed=None):
+def get_sampler(sampler_type, train_data, labeller, label_model=None, revision_model=None, encoder=None, seed=None):
     from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, CoreSetSampler, \
         RmUncertaintySampler, DALSampler, JointUncertaintySampler, ClusterMarginSampler, BadgeSampler
     if sampler_type == "passive":
@@ -168,65 +181,17 @@ def evaluate_label_quality(labels, probs):
     return acc, nll, brier_score
 
 
-def evaluate_performance(train_data, valid_data, test_data, aggregated_soft_labels, args, seed):
+def evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, seed):
     """
-    Evaluate the end model's performance after revising labels
+    Evaluate end model's performance with predicted labels
     """
     seed_everything(seed, workers=True)
-    nan_pos = np.isnan(aggregated_soft_labels) # replace nan with uniform distribution
-    aggregated_soft_labels[nan_pos] = 1 / train_data.n_class
-    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, aggregated_soft_labels)
-    aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
     end_model = get_end_model(args.end_model)
-    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
-    if args.use_soft_labels:
-        aggregated_labels = aggregated_soft_labels
-    else:
-        aggregated_labels = aggregated_hard_labels
-
-    if args.use_valid_labels:
-        end_model.fit(
-            dataset_train=train_data,
-            y_train=aggregated_labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    else:
-        end_model.fit(
-            dataset_train=train_data,
-            y_train=aggregated_labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    test_acc = end_model.test(test_data, "acc", device=args.device)
-    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
-    perf = {
-        "label_acc": label_acc,
-        "label_nll": label_nll,
-        "label_brier": label_brier,
-        "test_acc": test_acc,
-        "test_f1": test_f1
-    }
-    return perf
-
-
-def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
-    seed_everything(seed, workers=True)  # reproducibility for LM & EM
-    end_model = get_end_model(args.end_model)
-    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
+    n_steps = int(np.ceil(len(pred_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
+    evaluation_step = int(np.ceil(len(pred_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
     end_model.fit(
-        dataset_train=train_data,
-        y_train=train_data.labels,
+        dataset_train=pred_train_data,
+        y_train=pred_train_labels,
         dataset_valid=valid_data,
         y_valid=valid_data.labels,
         metric=args.metric,
@@ -235,245 +200,13 @@ def evaluate_golden_performance(train_data, valid_data, test_data, args, seed):
         n_steps=n_steps,
         evaluation_step=evaluation_step
     )
-
     test_acc = end_model.test(test_data, "acc", device=args.device)
     test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
     perf = {
-        "label_acc": 1.0,
-        "label_nll": 0.0,
-        "label_brier": 0.0,
         "test_acc": test_acc,
         "test_f1": test_f1
     }
-    return perf
-
-
-def evaluate_al_performance(train_data, valid_data, test_data, args, seed,
-                            ground_truth_labels=None):
-    # evaluate the performance of active learning with sampled ground truth labels
-    seed_everything(seed, workers=True)
-    if ground_truth_labels is None:
-        return None
-
-    end_model = get_end_model(args.end_model)
-    labeled_indices = np.nonzero(ground_truth_labels != ABSTAIN)[0]
-    labeled_train_data = train_data.create_subset(labeled_indices.tolist())
-    n_steps = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
-    if args.use_valid_labels:
-        end_model.fit(
-            dataset_train=labeled_train_data,
-            y_train=labeled_train_data.labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    else:
-        end_model.fit(
-            dataset_train=labeled_train_data,
-            y_train=labeled_train_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-
-    train_probs = end_model.predict_proba(train_data, device=args.device)
-    uncertainty = entropy(train_probs, axis=1)
-    uncertainty_order = np.argsort(uncertainty)[::-1]
-    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, train_probs)
-    test_acc = end_model.test(test_data, "acc", device=args.device)
-    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
-    perf = {
-        "label_acc": label_acc,
-        "label_nll": label_nll,
-        "label_brier": label_brier,
-        "test_acc": test_acc,
-        "test_f1": test_f1,
-        "uncertainty_order": uncertainty_order
-    }
-    return perf
-
-
-def evaluate_pl_performance(train_data, valid_data, test_data, args, seed,
-                            ground_truth_labels=None, threshold=0.8):
-    # evaluate the performance of semi-supervised learning using pseudo labelling
-    seed_everything(seed, workers=True)
-    if ground_truth_labels is None:
-        return None
-
-    end_model = get_end_model(args.end_model)
-    labeled_indices = np.nonzero(ground_truth_labels != ABSTAIN)[0]
-    labeled_train_data = train_data.create_subset(labeled_indices.tolist())
-    n_steps = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(labeled_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
-    if args.use_valid_labels:
-        end_model.fit(
-            dataset_train=labeled_train_data,
-            y_train=labeled_train_data.labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    else:
-        end_model.fit(
-            dataset_train=labeled_train_data,
-            y_train=labeled_train_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-
-    train_probs = end_model.predict_proba(train_data, device=args.device)
-    pseudo_labels = np.argmax(train_probs, axis=1)
-    pseudo_labels[labeled_indices] = np.array(labeled_train_data.labels) # for labeled data, use provided labels
-    train_conf = np.max(train_probs, axis=1)
-    pl_indices = np.nonzero((train_conf >= threshold) | (ground_truth_labels != ABSTAIN))[0]
-    pl_labels = pseudo_labels[pl_indices]
-    pl_train_data = train_data.create_subset(pl_indices.tolist())
-
-    end_model = get_end_model(args.end_model)
-    n_steps = int(np.ceil(len(pl_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(pl_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
-    if args.use_valid_labels:
-        end_model.fit(
-            dataset_train=pl_train_data,
-            y_train=pl_labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    else:
-        end_model.fit(
-            dataset_train=pl_train_data,
-            y_train=pl_labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    train_probs = end_model.predict_proba(train_data, device=args.device)
-    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, train_probs)
-    test_acc = end_model.test(test_data, "acc", device=args.device)
-    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
-    perf = {
-        "label_acc": label_acc,
-        "label_nll": label_nll,
-        "label_brier": label_brier,
-        "test_acc": test_acc,
-        "test_f1": test_f1,
-    }
-    return perf
-
-
-def evaluate_aw_performance(train_data, valid_data, test_data, args, seed,
-                            ground_truth_labels=None):
-    """
-    Evaluate Active WeaSuL's performance with ground truth labels
-    """
-    seed_everything(seed, workers=True)
-    label_model = get_label_model("aw", penalty_strength=args.penalty_strength)
-    label_model.fit(dataset_train=train_data, dataset_valid=valid_data, ground_truth_labels=ground_truth_labels)
-    aggregated_soft_labels = label_model.predict_proba(train_data)
-    nan_pos = np.isnan(aggregated_soft_labels)
-    aggregated_soft_labels[nan_pos] = 1 / train_data.n_class
-    label_acc, label_nll, label_brier = evaluate_label_quality(train_data.labels, aggregated_soft_labels)
-    aggregated_hard_labels = np.argmax(aggregated_soft_labels, axis=1)
-    end_model = get_end_model(args.end_model)
-    n_steps = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
-    evaluation_step = int(np.ceil(len(train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
-    if args.use_soft_labels:
-        aggregated_labels = aggregated_soft_labels
-    else:
-        aggregated_labels = aggregated_hard_labels
-
-    if args.use_valid_labels:
-        end_model.fit(
-            dataset_train=train_data,
-            y_train=aggregated_labels,
-            dataset_valid=valid_data,
-            y_valid=valid_data.labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    else:
-        end_model.fit(
-            dataset_train=train_data,
-            y_train=aggregated_labels,
-            metric=args.metric,
-            device=args.device,
-            verbose=args.verbose,
-            n_steps=n_steps,
-            evaluation_step=evaluation_step
-        )
-    test_acc = end_model.test(test_data, "acc", device=args.device)
-    test_f1 = end_model.test(test_data, "f1_macro", device=args.device)
-    perf = {
-        "label_acc": label_acc,
-        "label_nll": label_nll,
-        "label_brier": label_brier,
-        "test_acc": test_acc,
-        "test_f1": test_f1
-    }
-    return perf
-
-
-def plot_tsne(features, labels, figure_path, dataset, title, perplexity=5.0, pca_reduction=False):
-    """
-    Plot t-sne plot of transformed features
-    :return:
-    """
-    if len(features) > 1000:
-        rng = default_rng(seed=0)
-        indices = rng.choice(len(features), 1000, replace=False)
-        features = features[indices, :]
-        labels = np.array(labels)[indices]
-
-    if pca_reduction:
-        pca = PCA(n_components=128)
-        sc = StandardScaler()
-        features = sc.fit_transform(features)
-        features = pca.fit_transform(features)
-
-    X = TSNE(perplexity=perplexity, init="pca", learning_rate="auto").fit_transform(features)
-    color_map = {
-        0: "red",
-        1: "green",
-        2: "yellow",
-        3: "blue",
-        4: "cyan",
-        5: "purple",
-        6: "orange",
-        7: "lime",
-        8: "violet"
-    }
-    color = [color_map[i] for i in labels]
-    plt.figure()
-    plt.scatter(X[:, 0], X[:, 1], c=color)
-    plt.title(title)
-    dirname = Path(figure_path) / dataset
-    Path(dirname).mkdir(parents=True, exist_ok=True)
-    filename = os.path.join(dirname, f"tsne_{title}.jpg")
-    plt.savefig(filename)
+    return perf, end_model
 
 
 def save_results(results_list, output_path, dataset, filename):
@@ -484,88 +217,6 @@ def save_results(results_list, output_path, dataset, filename):
         json.dump({"data": results_list}, write_file, indent=4)
 
 
-def plot_dpal_results(results_list, figure_path, dataset, nametag, plot_labeled_frac=False):
-    """
-    Plot pipeline results (train label accuracy and test set performance)
-    :param results:
-    :return:
-    """
-    # first plot LM's coverage and covered accuracy on train set
-    n_run = len(results_list)
-
-    res = {
-        "n_labeled": [],  # number of expert labeled data
-        "frac_labeled": [],  # fraction of expert labeled data
-        "al_label_acc": [],  # AL label accuracy
-        "dp_label_acc": [],  # DP label accuracy
-        "dpal_label_acc": [],  # DPAL label accuracy
-        "dpal_test_acc": [],  # end model's test accuracy
-        "dpal_test_f1": [],  # end model's test f1 score
-        "al_test_acc": [],  # active learning model's test accuracy
-        "al_test_f1": [],  # active learning model's test f1
-        "golden_test_acc": [],  # end model's test accuracy using golden labels
-        "golden_test_f1": [],   # end model's test f1 using golden labels
-    }
-    for i in range(n_run):
-        for key in res:
-            res[key].append(results_list[i][key])
-
-    for key in res:
-        res[key] = np.array(res[key])
-
-    if plot_labeled_frac:
-        x = results_list[0]["frac_labeled"]
-    else:
-        x = results_list[0]["n_labeled"]
-
-    # plot train label accuracy
-    fig, ax = plt.subplots()
-    y = res["dp_label_acc"].mean()
-    y_stderr = res["dp_label_acc"].std() / np.sqrt(n_run)
-    ax.plot(x, np.repeat(y, len(x)), label="DP label accuracy", c="b")
-    ax.fill_between(x, np.repeat(y-1.96 * y_stderr, len(x)), np.repeat(y+1.96 * y_stderr, len(x)),alpha=.1, color="b")
-
-    y = res["al_label_acc"].mean(axis=0)
-    y_stderr = res["al_label_acc"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="AL label accuracy", c="g")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
-
-    y = res["dpal_label_acc"].mean(axis=0)
-    y_stderr = res["dpal_label_acc"].std(axis=0) / np.sqrt(n_run)
-    ax.plot(x, y, label="DPAL label accuracy", c="r")
-    ax.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
-
-    ax.set_xlabel("label budget")
-    ax.set_ylabel("train label accuracy")
-    ax.set_title(dataset+" Train Label Accuracy")
-    ax.legend()
-    dirname = Path(figure_path) / dataset
-    Path(dirname).mkdir(parents=True, exist_ok=True)
-    train_fig_path = os.path.join(dirname, nametag + "_TrainLabel.jpg")
-    fig.savefig(train_fig_path)
-
-    fig2, ax2 = plt.subplots()
-    y = res["test_acc"][:,0].mean()
-    y_stderr = res["test_acc"][:,0].std() / np.sqrt(n_run)
-    ax2.plot(x, np.repeat(y, len(x)), label="DP test accuracy", c="b")
-    ax2.fill_between(x, np.repeat(y - 1.96 * y_stderr, len(x)), np.repeat(y + 1.96 * y_stderr, len(x)), alpha=.1,
-                    color="b")
-
-    y = res["em_test_al"].mean(axis=0)
-    y_stderr = res["em_test_al"].std(axis=0) / np.sqrt(n_run)
-    ax2.plot(x, y, label="AL test accuracy", c="g")
-    ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="g")
-
-    y = res["em_test"].mean(axis=0)
-    y_stderr = res["em_test"].std(axis=0) / np.sqrt(n_run)
-    ax2.plot(x, y, label="DPAL test accuracy", c="r")
-    ax2.fill_between(x, y - 1.96 * y_stderr, y + 1.96 * y_stderr, alpha=.1, color="r")
-
-    y = res["em_test_golden"].mean()
-    ax2.axhline(y, color='k', linestyle='--', label="Golden test accuracy")
-    ax2.set_xlabel("label budget")
-    ax2.set_ylabel("end model test accuracy")
-    ax2.set_title(dataset+" Test Accuracy")
-    ax2.legend()
-    test_fig_path = os.path.join(dirname, nametag + "_TestAcc.jpg")
-    fig2.savefig(test_fig_path)
+def update_results(results_dict, **kwargs):
+    for key in kwargs:
+        results_dict[key].append(kwargs[key])

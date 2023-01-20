@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import copy
-from utils import ABSTAIN
 
 
 def plot_syn_dataset(X, y, weights, labels, title, figpath):
@@ -49,6 +48,7 @@ def generate_random_counterpart(dataset):
     :param dataset: origin dataset
     :return: transformed_dataset. LF make mistakes randomly
     """
+    from utils import ABSTAIN
     trans_dataset = copy.copy(dataset)
     L = np.array(dataset.weak_labels)
     y = np.array(dataset.labels)

@@ -34,9 +34,10 @@ class BaseSampler:
     def sample_distinct(self, n=1):
         raise NotImplementedError()
 
-    def update_stats(self, train_data, label_model=None, revision_model=None):
-        self.train_data = train_data
-        self.weak_labels = np.array(train_data.weak_labels)
+    def update_stats(self, train_data=None, label_model=None, revision_model=None):
+        if train_data is not None:
+            self.train_data = train_data
+            self.weak_labels = np.array(train_data.weak_labels)
         if label_model is not None:
             self.label_model = label_model
         if revision_model is not None:
