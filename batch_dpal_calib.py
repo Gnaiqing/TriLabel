@@ -2,25 +2,25 @@ import os
 
 dataset_list = [
     ## text datasets
-    # "youtube",
-    # "sms",
+    "youtube",
+    "sms",
     "imdb",
-    # "yelp",
+    "yelp",
     ## tabular datasets
-    # "PhishingWebsites",
-    # "bank-marketing",
-    # "census",
+    "PhishingWebsites",
+    "bank-marketing",
+    "census",
     ## image datasets
     # "tennis",
     # "basketball",
     ## multiclass datasets
-    # "trec",
-    # "agnews",
+    "trec",
+    "agnews",
     ## relation datasets
-    "spouse",
-    "cdr",
-    "semeval",
-    "chemprot"
+    # "spouse",
+    # "cdr",
+    # "semeval",
+    # "chemprot"
 ]
 
 bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
@@ -34,23 +34,25 @@ for dataset in dataset_list:
         else:
             ext = ""
 
+        if tag == "08":
+            ext += " --max_dim 300"
         # No calibration
-        # cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 1 --LF_selected_size all " \
-        #       f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
-        # print(cmd)
-        # os.system(cmd)
-        #
-        # # Use ensemble calibration
-        # cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 10 --LF_selected_size all " \
-        #       f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
-        # print(cmd)
-        # os.system(cmd)
-        #
-        # # Ensemble + Feature selection
-        # cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 10 --LF_selected_size auto " \
-        #       f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
-        # print(cmd)
-        # os.system(cmd)
+        cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 1 --LF_selected_size all " \
+              f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
+        print(cmd)
+        os.system(cmd)
+
+        # Use ensemble calibration
+        cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 10 --LF_selected_size all " \
+              f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
+        print(cmd)
+        os.system(cmd)
+
+        # Ensemble + Feature selection
+        cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 10 --LF_selected_size auto " \
+              f"--label_model {lm} --use_valid_labels --use_soft_labels --tag {tag}"
+        print(cmd)
+        os.system(cmd)
 
         # Ensemble + Feature selection + bootstrap
         cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --lm_ensemble_size 10 --LF_selected_size auto " \

@@ -4,14 +4,11 @@ import numpy as np
 import itertools
 import torch
 import torch.nn as nn
-from tqdm import trange
-from typing import Optional
 from wrench.labelmodel import MajorityVoting
-from .performance import PerformanceMixin
 from typing import Any, List, Optional, Union
 from wrench.dataset import BaseDataset
 
-class LabelModel(PerformanceMixin):
+class LabelModel:
     """Fit label model using Matrix Completion approach (Ratner et al. 2019).
     Optionally, add penalty for labeled points (active learning).
     """

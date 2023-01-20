@@ -2,10 +2,10 @@ import os
 
 dataset_list = [
     ## text datasets
-    "youtube",
+    # "youtube",
     "sms",
-    "imdb",
-    "yelp",
+    # "imdb",
+    # "yelp",
     ## tabular datasets
     # "PhishingWebsites",
     # "bank-marketing",
@@ -24,7 +24,7 @@ dataset_list = [
 ]
 
 bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
-tag = "09"
+tag = "07"
 label_model_list = ["metal"]
 test_mode = False
 for dataset in dataset_list:
@@ -34,9 +34,11 @@ for dataset in dataset_list:
         else:
             ext = ""
 
+        if tag == "08":
+            ext += " --max_dim 300"
         # evaluate the effect of sampler
-        for sampler in ["passive", "uncertain", "uncertain-rm", "dal", "cluster-margin"]:
-            cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --max_dim 300 --sampler {sampler} " \
+        for sampler in ["passive", "uncertain", "uncertain-rm", "cluster-margin", "badge", "coreset"]:
+            cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --sampler {sampler} " \
                   f"--label_model {lm} --use_valid_labels --use_soft_labels --repeats 10 --tag {tag}"
             print(cmd)
             os.system(cmd)

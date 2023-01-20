@@ -2,22 +2,28 @@ import os
 
 dataset_list = [
     ## text datasets
-    "youtube",
-    "imdb",
-    "yelp",
+    # "youtube",
+    "sms",
+    # "imdb",
+    # "yelp",
     ## tabular datasets
-    "PhishingWebsites",
-    "bank-marketing",
-    "census",
+    # "PhishingWebsites",
+    # "bank-marketing",
+    # "census",
     ## image datasets
     # "tennis",
     # "basketball",
     ## multiclass datasets
-    "trec",
-    "agnews"
+    # "trec",
+    # "agnews",
+    ## relation datasets
+    # "spouse",
+    # "cdr",
+    # "semeval",
+    # "chemprot"
 ]
 
-bert_embedding_datasets = ["youtube", "imdb", "yelp", "trec", "agnews"]
+bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
 label_model_list = ["metal"]
 tag = "07"
 test_mode = False
@@ -28,6 +34,8 @@ for dataset in dataset_list:
         else:
             ext = ""
 
+        if tag == "08":
+            ext += " --max_dim 300"
         # evaluate the effect of ensemble size, bootstrap and select features
         for aggregation_method in ["bayesian", "average", "weighted", "confidence"]:
             cmd = f"python dpal_pipeline.py --dataset {dataset} {ext} --aggregation_method {aggregation_method} " \

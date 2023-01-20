@@ -2,10 +2,10 @@ import os
 
 dataset_list = [
     ## text datasets
-    "youtube",
+    # "youtube",
     "sms",
-    "imdb",
-    "yelp",
+    # "imdb",
+    # "yelp",
     ## tabular datasets
     # "PhishingWebsites",
     # "bank-marketing",
@@ -24,15 +24,16 @@ dataset_list = [
 ]
 
 bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
-tag = "08"
+tag = "07"
 test_mode = False
 for dataset in dataset_list:
     if dataset in bert_embedding_datasets:
         ext = " --extract_fn bert"
     else:
         ext = ""
-
-    cmd = f"python al_pipeline.py --dataset {dataset} {ext} --max_dim 300 --use_valid_labels --use_soft_labels --tag {tag}"
+    if tag == "08":
+        ext += " --max_dim 300"
+    cmd = f"python al_pipeline.py --dataset {dataset} {ext} --use_valid_labels --use_soft_labels --tag {tag}"
     print(cmd)
     os.system(cmd)
 
