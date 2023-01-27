@@ -5,7 +5,7 @@ import numpy as np
 
 class BadgeSampler(BaseSampler):
     def sample_distinct(self, n=1):
-        if self.revision_model.clf is None:
+        if not self.initialized:
             indices = np.random.choice(self.candidate_indices, n, replace=False)  # random selection for first batch
             labels = self.label_selected_indices(indices)
             return indices, labels
@@ -17,6 +17,11 @@ class BadgeSampler(BaseSampler):
             indices = self.candidate_indices[indices]
             labels = self.label_selected_indices(indices)
             return indices, labels
+
+    def update_stats(self, train_data=None, label_model=None, revision_model=None):
+        super(BadgeSampler, self).update_stats(train_data=train_data, label_model=label_model,
+                                                     revision_model=revision_model)
+        self.initialized = True
 
 
 

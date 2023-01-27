@@ -12,6 +12,10 @@ def run_active_learning(train_data, valid_data, test_data, args, seed):
     results = {
         "n_labeled": [],  # number of expert labeled data
         "frac_labeled": [],  # fraction of expert labeled data
+        "label_acc": [],
+        "label_nll": [],
+        "label_brier": [],
+        "label_coverage": [],
         "test_acc": [],  # end model's test accuracy when using active learning
         "test_f1": [],  # end model's test f1 score (macro) using active learning
         "golden_test_acc": np.nan,  # end model's test accuracy using golden labels
@@ -24,7 +28,9 @@ def run_active_learning(train_data, valid_data, test_data, args, seed):
                                         args=args,
                                         seed=seed)
 
-    update_results(results, n_labeled=0, frac_labeled=0.0, test_acc=np.nan, test_f1=np.nan)
+    update_results(results, n_labeled=0, frac_labeled=0.0,
+                   label_acc=np.nan, label_nll = np.nan, label_brier=np.nan, label_coverage=0,
+                   test_acc=np.nan, test_f1=np.nan)
     results["golden_test_acc"] = golden_perf["test_acc"]
     results["golden_test_f1"] = golden_perf["test_f1"]
 
@@ -54,6 +60,7 @@ def run_active_learning(train_data, valid_data, test_data, args, seed):
         n_sampled = sampler.get_n_sampled()
         frac_sampled = n_sampled / len(train_data)
         update_results(results, n_labeled=n_sampled, frac_labeled=frac_sampled,
+                       label_acc=1.0, label_nll=0.0, label_brier=0.0, label_coverage=frac_sampled,
                        test_acc=perf["test_acc"], test_f1=perf["test_f1"])
 
     end = time.process_time()

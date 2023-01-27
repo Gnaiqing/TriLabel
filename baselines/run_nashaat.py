@@ -91,7 +91,7 @@ if __name__ == "__main__":
     parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
     parser.add_argument("--max_dim", type=int, default=300)
     # sampler
-    parser.add_argument("--sampler", type=str, default="uncertain")
+    parser.add_argument("--sampler", type=str, default="uncertain-lm")
     parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
     parser.add_argument("--sample_per_iter",type=float, default=0.01)  # sample budget per iteration
     # label model and end models

@@ -3,6 +3,7 @@ import time
 from labeller.labeller import get_labeller
 import numpy as np
 from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
 from utils import evaluate_end_model, save_results, get_sampler, get_label_model, update_results, \
     preprocess_data, evaluate_label_quality, get_reviser
 
@@ -52,6 +53,17 @@ def run_dpal_ensemble(train_data, valid_data, test_data, args, seed):
     reviser = get_reviser(args.revision_model, train_data, valid_data, encoder, args.device, seed)
     sampler = get_sampler(args.sampler, train_data, labeller, label_model, reviser, encoder, seed=seed)
 
+    lm_probs = label_model.predict_proba(train_data)
+    lm_preds = np.argmax(lm_probs, axis=1)
+    lm_conf = np.max(lm_probs, axis=1)
+    if args.verbose:
+        plt.figure()
+        plt.hist(lm_conf, bins=np.linspace(0.5, 1, 11))
+        plt.xlabel("confidence")
+        plt.ylabel("count")
+        plt.title(f"Label model confidence ({args.dataset})")
+        plt.show()
+
     n_labeled = 0
     while n_labeled < args.sample_budget:
         n_to_sample = min(args.sample_budget - sampler.get_n_sampled(), args.sample_per_iter)
@@ -61,13 +73,17 @@ def run_dpal_ensemble(train_data, valid_data, test_data, args, seed):
         reviser.train_revision_model(indices, labels)
 
         # revise probabilistic labels using active learning
-        lm_probs = label_model.predict_proba(train_data)
-        lm_preds = np.argmax(lm_probs, axis=1)
-        lm_conf = np.max(lm_probs, axis=1)
-
+        n_labeled = sampler.get_n_sampled()
         al_probs = reviser.predict_proba(train_data)
         al_preds = np.argmax(al_probs, axis=1)
         al_conf = np.max(al_probs, axis=1)
+        if args.verbose:
+            plt.figure()
+            plt.hist(al_conf, bins=np.linspace(0.5, 1, 11))
+            plt.xlabel("confidence")
+            plt.ylabel("count")
+            plt.title(f"AL confidence ({args.dataset}) with {n_labeled} points")
+            plt.show()
 
         if args.aggregation_method == "confidence":
             dp_active_indices = np.nonzero(lm_conf >= al_conf)[0]
@@ -114,6 +130,15 @@ def run_dpal_ensemble(train_data, valid_data, test_data, args, seed):
 
     end = time.process_time()
     results["time"] = end - start
+    if args.verbose:
+        plt.figure()
+        plt.plot(results["n_labeled"], results["concensus_frac"], label="concensus")
+        plt.plot(results["n_labeled"], results["al_active_frac"], label="AL dominant")
+        plt.plot(results["n_labeled"], results["dp_active_frac"], label="DP dominant")
+        plt.legend()
+        plt.xlabel("label budget")
+        plt.title(args.dataset)
+        plt.show()
     return results
 
 

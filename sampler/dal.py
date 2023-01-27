@@ -1,9 +1,17 @@
 from .base import BaseSampler
 from sklearn.neural_network import MLPClassifier
 import numpy as np
+import torch
 
 
 class DALSampler(BaseSampler):
+    def __init__(self, train_data, labeller, label_model=None, revision_model=None, encoder=None, **kwargs):
+        super(DALSampler, self).__init__(train_data, labeller, label_model, revision_model, encoder, **kwargs)
+        if encoder is None:
+            self.rep = self.train_data.features
+        else:
+            self.rep = self.encoder(torch.tensor(self.train_data.features)).detach().cpu().numpy()
+
     def train_discriminative_model(self, labeled_rep, unlabeled_rep):
         discriminator = MLPClassifier(hidden_layer_sizes=(100, 100),
                                       max_iter=500,

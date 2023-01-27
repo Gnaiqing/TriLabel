@@ -2,14 +2,14 @@ import os
 
 dataset_list = [
     ## text datasets
-    "youtube",
-    "sms",
-    "imdb",
-    "yelp",
+    # "youtube",
+    # "sms",
+    # "imdb",
+    # "yelp",
     ## tabular datasets
-    # "PhishingWebsites",
-    # "bank-marketing",
-    # "census",
+    "PhishingWebsites",
+    "bank-marketing",
+    "census",
     ## image datasets
     # "tennis",
     # "basketball",
@@ -24,18 +24,20 @@ dataset_list = [
 ]
 
 method_list = [
-    "al",
-    "aw",
-    "nashaat",
-    "pl",
-    "dpal-ensemble"
+    # "al",
+    # "aw",
+    # "pl",
+    # "nashaat",
+    "dpal-boost"
 ]
 
 bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
 tag = "07"
-test_mode = True
+test_mode = False
 use_soft_labels = True
 verbose = False
+fixed_budget_size = False
+
 for dataset in dataset_list:
     ext = ""
     if dataset in bert_embedding_datasets:
@@ -44,6 +46,8 @@ for dataset in dataset_list:
         ext += " --use_soft_labels"
     if verbose:
         ext += " --verbose"
+    if fixed_budget_size:
+        ext += " --sample_budget 300 --sample_per_iter 50"
 
     for method in method_list:
         if method == "al":
@@ -56,6 +60,8 @@ for dataset in dataset_list:
             cmd = f"python baselines/pseudo_labelling.py --dataset {dataset} {ext} --tag {tag}"
         elif method == "dpal-ensemble":
             cmd = f"python baselines/dpal_ensemble.py --dataset {dataset} {ext} --tag {tag}"
+        elif method == "dpal-boost":
+            cmd = f"python baselines/dpal_boost.py --dataset {dataset} {ext} --tag {tag}"
 
         print(cmd)
         os.system(cmd)

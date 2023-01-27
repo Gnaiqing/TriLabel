@@ -11,6 +11,8 @@ class MLPReviser(BaseReviser):
     MLP trained with cross entropy loss
     """
     def train_revision_model(self, indices, labels):
+        self.sampled_indices = indices
+        self.sampled_labels = labels
         self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
         trainer = NeuralNetworkTrainer(self.clf)
         X_sampled = self.get_feature(self.train_data)[indices, :]

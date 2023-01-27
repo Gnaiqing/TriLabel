@@ -1,7 +1,6 @@
 import numpy as np
 from numpy.random import default_rng
 from labeller.labeller import get_item
-import torch
 
 
 class BaseSampler:
@@ -12,10 +11,7 @@ class BaseSampler:
         self.label_model = label_model
         self.revision_model = revision_model
         self.encoder = encoder
-        if encoder is None:
-            self.rep = self.train_data.features
-        else:
-            self.rep = self.encoder(torch.tensor(self.train_data.features)).detach().cpu().numpy()
+        self.initialized = False
         self.kwargs = kwargs
         self.sampled = np.repeat(False, len(self.train_data))
         self.sampled_labels = np.repeat(-1, len(self.train_data)).astype(int)
