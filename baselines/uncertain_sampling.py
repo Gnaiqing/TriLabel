@@ -94,6 +94,12 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default="test")
     args = parser.parse_args()
     train_data, valid_data, test_data = preprocess_data(args)
+    if args.sample_budget < 1:
+        args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
+        args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
+    else:
+        args.sample_budget = int(args.sample_budget)
+        args.sample_per_iter = int(args.sample_per_iter)
     np.random.seed(args.seed)
     run_seeds = np.random.randint(1, 100000, args.repeats)
 

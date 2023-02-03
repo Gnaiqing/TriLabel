@@ -2,8 +2,7 @@ from .dal import DALSampler
 from .maxkl import MaxKLSampler
 from .passive import PassiveSampler
 from .uncertain import UncertaintySampler
-from .uncertain_rm import RmUncertaintySampler
-from .uncertain_joint import JointUncertaintySampler
 from .cluster_margin import ClusterMarginSampler
 from .badge import BadgeSampler
 from .coreset import CoreSetSampler
+from .tri import TriSampler

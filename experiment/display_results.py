@@ -8,12 +8,13 @@ import matplotlib.pyplot as plt
 
 
 method_dict = {
-    "dpal-boost": "TriLabel",
+    "trilabel": "TriLabel",
     "al": "Active Learning",
     "aw": "Active WeaSuL",
     "nashaat": "Revise LF",
     "pl": "Semi Supervised"
 }
+
 
 def get_results(results_list):
     n_run = len(results_list)
@@ -34,6 +35,7 @@ def get_results(results_list):
     print_res["time"] = np.repeat(res["time"].mean(axis=0), res["frac_labeled"].shape[1])
     print_res["n_labeled"] = res["n_labeled"][0,:]
     print_res["frac_labeled"] = res["frac_labeled"][0,:]
+    print_res["golden_test_f1"] = res["golden_test_f1"].mean()
 
     for metric in ["label_acc", "label_coverage", "test_f1"]:
         print_res[metric] = res[metric].mean(axis=0)
@@ -51,6 +53,9 @@ def plot_results(dataset, results_map, metric, output_path, tag):
         y1_stderr = results_map[method][f"{metric}_stderr"]
         ax.plot(x, y1, label=method)
         ax.fill_between(x, y1 - 1.96 * y1_stderr, y1 + 1.96 * y1_stderr, alpha=.1)
+        if method == "TriLabel":
+            y_gold = results_map[method]["golden_test_f1"]
+            ax.axhline(y=y_gold, ls="--",c="k", label="Golden Label")
 
     ax.set_xlabel("Label Budget")
     ax.set_ylabel(metric)
@@ -63,14 +68,15 @@ def plot_results(dataset, results_map, metric, output_path, tag):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "imdb", "yelp", "sms"])
-    parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "nashaat", "pl", "dpal-boost"])
-    parser.add_argument("--ablation", type=str, default=None, choices=["sampler", "aggregation", "calibration"])
+    parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
+                                                                   "bank-marketing", "census", "tennis", "basketball"])
+    parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "nashaat", "pl", "trilabel"])
+    parser.add_argument("--exp_type", type=str, default="baseline", choices=["baseline", "sampler", "quality"])
     parser.add_argument("--label_model", type=str, default="metal")
     parser.add_argument("--end_model", type=str, default="mlp")
-    parser.add_argument("--aggregation", type=str, default="bayesian")
-    parser.add_argument("--sampler", type=str, default="passive")
-    parser.add_argument("--tag", type=str, default="07")
+    parser.add_argument("--sampler", type=str, nargs="+", default=["passive", "uncertain-lm", "uncertain-rm",
+                         "cluster-margin-rm", "badge", "coreset" ,"tri-random", "tri-pl+random"])
+    parser.add_argument("--tag", type=str, default="00")
     parser.add_argument("--output_path", type=str, default="output/")
     parser.add_argument("--plot_results", action="store_true")
     parser.add_argument("--print_results", action="store_true")
@@ -79,12 +85,10 @@ if __name__ == "__main__":
 
     for dataset in args.dataset:
         results_map = {}
-        if args.ablation is None:
+        if args.exp_type == "baseline":
             for method in args.method:
-                if method == "dpal-ensemble":
-                    id_tag = f"dpal_{args.label_model}_{args.end_model}_bayesian_passive_{args.tag}"
-                elif method == "dpal-boost":
-                    id_tag = f"dpal-boost_{args.label_model}_{args.end_model}_uncertain-rm_{args.tag}"
+                if method == "trilabel":
+                    id_tag = f"trilabel_{args.label_model}_{args.end_model}_uncertain-rm_{args.tag}"
                 elif method == "nashaat":
                     id_tag = f"{method}_{args.label_model}_uncertain-lm_{args.tag}"
                 else:
@@ -109,10 +113,9 @@ if __name__ == "__main__":
                 for metric in ["label_acc", "label_coverage", "test_f1"]:
                     plot_results(dataset, results_map, metric, args.output_path, args.tag)
 
-        elif args.ablation == "sampler":
-            method = "dpal"
-            for sampler in ["passive", "uncertain-joint", "cluster-margin", "coreset", "badge"]:
-                id_tag = f"{method}_{args.label_model}_{args.end_model}_{args.aggregation}_{sampler}_{args.tag}"
+        elif args.exp_type == "sampler":
+            for sampler in args.sampler:
+                id_tag = f"trilabel_{args.label_model}_{args.end_model}_{sampler}_{args.tag}"
                 filepath = Path(args.output_path) / dataset / f"{id_tag}.json"
                 if os.path.exists(filepath):
                     readfile = open(filepath, "r")

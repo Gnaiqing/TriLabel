@@ -1,70 +1,60 @@
 import os
+import argparse
 
-dataset_list = [
-    ## text datasets
-    # "youtube",
-    # "sms",
-    # "imdb",
-    # "yelp",
-    ## tabular datasets
-    "PhishingWebsites",
-    "bank-marketing",
-    "census",
-    ## image datasets
-    # "tennis",
-    # "basketball",
-    ## multiclass datasets
-    # "trec",
-    # "agnews",
-    ## relation datasets
-    # "spouse",
-    # "cdr",
-    # "semeval",
-    # "chemprot"
-]
+bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp"]
 
-method_list = [
-    # "al",
-    # "aw",
-    # "pl",
-    # "nashaat",
-    "dpal-boost"
-]
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
+                                                                   "bank-marketing", "census", "tennis", "basketball"])
+    parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "pl", "nashaat", "trilabel"])
+    parser.add_argument("--sampler", type=str, nargs="+", default=["passive", "uncertain-lm", "uncertain-rm",
+                                                                   "tri-pl+random","coreset"])
+    parser.add_argument("--use_soft_labels", type=bool, default=True)
+    parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--tag", type=str, default="test")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--sample_budget", type=float, default=300)
+    parser.add_argument("--sample_per_iter", type=float, default=100)
+    parser.add_argument("--desired_label_acc", type=float, default=None)
+    parser.add_argument("--plot_performance", action="store_true")
+    args = parser.parse_args()
+    tag = args.tag
+    for dataset in args.dataset:
+        ext = f" --sample_budget {args.sample_budget} --sample_per_iter {args.sample_per_iter} --repeats {args.repeats}"
+        if dataset in bert_embedding_datasets:
+            ext += " --extract_fn bert"
+        if args.use_soft_labels:
+            ext += " --use_soft_labels"
+        if args.verbose:
+            ext += " --verbose"
 
-bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp", "trec", "agnews", "spouse", "cdr", "semeval", "chemprot"]
-tag = "07"
-test_mode = False
-use_soft_labels = True
-verbose = False
-fixed_budget_size = False
+        for method in args.method:
+            if method == "al":
+                cmd = f"python baselines/uncertain_sampling.py --dataset {dataset} {ext} --tag {tag}"
+                print(cmd)
+                os.system(cmd)
+            elif method == "aw":
+                cmd = f"python baselines/run_active_weasul.py --dataset {dataset} {ext} --tag {tag}"
+                print(cmd)
+                os.system(cmd)
+            elif method == "nashaat":
+                cmd = f"python baselines/run_nashaat.py --dataset {dataset} {ext} --tag {tag}"
+                print(cmd)
+                os.system(cmd)
+            elif method == "pl":
+                cmd = f"python baselines/pseudo_labelling.py --dataset {dataset} {ext} --tag {tag}"
+                print(cmd)
+                os.system(cmd)
+            elif method == "trilabel":
+                trilabel_ext = ""
+                if args.desired_label_acc is not None:
+                    trilabel_ext += f"--desired_label_acc {args.desired_label_acc}"
+                if args.plot_performance:
+                    trilabel_ext += f" --plot_performance"
+                for sampler in args.sampler:
+                    cmd = f"python trilabel.py --dataset {dataset} {ext} {trilabel_ext} " \
+                          f"--sampler {sampler} --evaluate --tag {tag}"
+                    print(cmd)
+                    os.system(cmd)
 
-for dataset in dataset_list:
-    ext = ""
-    if dataset in bert_embedding_datasets:
-        ext += " --extract_fn bert"
-    if use_soft_labels:
-        ext += " --use_soft_labels"
-    if verbose:
-        ext += " --verbose"
-    if fixed_budget_size:
-        ext += " --sample_budget 300 --sample_per_iter 50"
-
-    for method in method_list:
-        if method == "al":
-            cmd = f"python baselines/uncertain_sampling.py --dataset {dataset} {ext} --tag {tag}"
-        elif method == "aw":
-            cmd = f"python baselines/run_active_weasul.py --dataset {dataset} {ext} --tag {tag}"
-        elif method == "nashaat":
-            cmd = f"python baselines/run_nashaat.py --dataset {dataset} {ext} --tag {tag}"
-        elif method == "pl":
-            cmd = f"python baselines/pseudo_labelling.py --dataset {dataset} {ext} --tag {tag}"
-        elif method == "dpal-ensemble":
-            cmd = f"python baselines/dpal_ensemble.py --dataset {dataset} {ext} --tag {tag}"
-        elif method == "dpal-boost":
-            cmd = f"python baselines/dpal_boost.py --dataset {dataset} {ext} --tag {tag}"
-
-        print(cmd)
-        os.system(cmd)
-
-    if test_mode:
-        break

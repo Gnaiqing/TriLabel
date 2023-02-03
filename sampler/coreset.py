@@ -9,7 +9,7 @@ class CoreSetSampler(BaseSampler):
         self.train_embedding = None
 
     def sample_distinct(self, n=1):
-        if self.revision_model.clf is None:
+        if not self.initialized:
             indices = np.random.choice(self.candidate_indices, n, replace=False)  # random selection for first batch
             labels = self.label_selected_indices(indices)
             return indices, labels
@@ -31,7 +31,8 @@ class CoreSetSampler(BaseSampler):
             labels = self.label_selected_indices(indices)
             return indices, labels
 
-    def update_stats(self, train_data, label_model=None, revision_model=None):
-        super(CoreSetSampler, self).update_stats(train_data, label_model=label_model, revision_model=revision_model)
-        if self.train_embedding is None:
+    def update_stats(self, train_data=None, label_model=None, revision_model=None):
+        super(CoreSetSampler, self).update_stats(train_data=train_data, label_model=label_model, revision_model=revision_model)
+        if not self.initialized:
+            self.initialized = True
             self.train_embedding = self.revision_model._features

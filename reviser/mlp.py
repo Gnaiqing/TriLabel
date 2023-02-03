@@ -3,6 +3,7 @@ from reviser.models import MLPNet
 from reviser.trainers import NeuralNetworkTrainer
 from torch.utils.data import TensorDataset
 import torch
+from pytorch_lightning import seed_everything
 import numpy as np
 
 
@@ -11,6 +12,7 @@ class MLPReviser(BaseReviser):
     MLP trained with cross entropy loss
     """
     def train_revision_model(self, indices, labels):
+        seed_everything(self.seed)
         self.sampled_indices = indices
         self.sampled_labels = labels
         self.clf = MLPNet(input_dim=self.train_rep.shape[1], output_dim=self.train_data.n_class)
@@ -41,11 +43,18 @@ class MLPReviser(BaseReviser):
     def get_pseudo_grads(self, dataset):
         preds = self.predict(dataset)
         X = torch.tensor(self.get_feature(dataset)).to(self.device)
+        N = X.shape[0]
         y_hat = torch.tensor(preds).to(self.device)
         loss_func = torch.nn.CrossEntropyLoss()
-        output = self.clf(X)
-        loss = loss_func(output, y_hat)
-        loss.backward()
-        grads = self.clf.fc2.weight.grad.detach().cpu().numpy().flatten()
+        optimizer = torch.optim.Adam(self.clf.parameters())  # used for clear gradient
+        cur_grads = []
+        for j in range(N):
+            optimizer.zero_grad()
+            output = self.clf(X[j, :])
+            loss = loss_func(output, y_hat[j])
+            loss.backward()
+            cur_grads.append(self.clf.fc2.weight.grad.detach().cpu().numpy().flatten())
+
+        grads = np.vstack(cur_grads)
         return grads
 

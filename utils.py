@@ -5,6 +5,9 @@ from wrench.endmodel import EndClassifierModel, Cosine
 from dataset.load_dataset import load_real_dataset, load_synthetic_dataset
 from sklearn.metrics import accuracy_score
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from pytorch_lightning import seed_everything
 import random
 import torch
 from pathlib import Path
@@ -21,31 +24,24 @@ def preprocess_data(args):
 
     if args.max_dim is not None and train_data.features.shape[1] > args.max_dim:
         # use truncated SVD to reduce feature dimensions
-        pca = PCA(n_components=args.max_dim)
+        pca = PCA(n_components=args.max_dim, random_state=args.seed)
         pca.fit(train_data.features)
         train_data.features = pca.transform(train_data.features)
         valid_data.features = pca.transform(valid_data.features)
         test_data.features = pca.transform(test_data.features)
-
-    if args.sample_budget < 1:
-        args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
-        args.sample_per_iter = np.ceil(args.sample_per_iter * len(train_data)).astype(int)
-    else:
-        args.sample_budget = int(args.sample_budget)
-        args.sample_per_iter = int(args.sample_per_iter)
 
     return train_data, valid_data, test_data
 
 
 def get_label_model(model_type, **kwargs):
     if model_type == "snorkel":
-        label_model = Snorkel(lr=0.01, l2=0.0, n_epochs=100)
+        label_model = Snorkel(lr=0.01, l2=0.0, n_epochs=100, **kwargs)
     elif model_type == "ds":
         label_model = DawidSkene()
     elif model_type == "mv":
         label_model = MajorityVoting()
     elif model_type == "metal":
-        label_model = MeTaL(lr=0.01, n_epochs=100)
+        label_model = MeTaL(lr=0.01, n_epochs=100, **kwargs)
     elif model_type == "aw":
         if "penalty_strength" in kwargs:
             label_model = LabelModel(n_epochs=100, lr=0.01, active_learning=True,
@@ -93,34 +89,6 @@ def get_end_model(model_type):
             optimizer_lr=5e-5,
             optimizer_weight_decay=0.0
         )
-    elif model_type == "cosine-bert":
-        end_model = Cosine(
-            batch_size=32,
-            real_batch_size=32,  # for accumulative gradient update
-            test_batch_size=32,
-            lamda=0.1,
-            backbone='BERT',
-            backbone_model_name='bert-base-cased',
-            backbone_max_tokens=128,
-            backbone_fine_tune_layers=-1,  # fine  tune all
-            optimizer='AdamW',
-            optimizer_lr=5e-5,
-            optimizer_weight_decay=1e-4,
-    )
-    elif model_type == "cosine-roberta":
-        end_model = Cosine(
-            batch_size=32,
-            real_batch_size=32,  # for accumulative gradient update
-            test_batch_size=32,
-            lamda=0.1,
-            backbone='BERT',
-            backbone_model_name='roberta-base',
-            backbone_max_tokens=128,
-            backbone_fine_tune_layers=-1,  # fine  tune all
-            optimizer='AdamW',
-            optimizer_lr=5e-5,
-            optimizer_weight_decay=1e-4,
-        )
     else:
         raise ValueError(f"end model {model_type} not implemented.")
     return end_model
@@ -128,7 +96,7 @@ def get_end_model(model_type):
 
 def get_sampler(sampler_type, train_data, labeller, label_model=None, revision_model=None, encoder=None, seed=None, **kwargs):
     from sampler import PassiveSampler, UncertaintySampler, MaxKLSampler, CoreSetSampler, \
-         DALSampler, ClusterMarginSampler, BadgeSampler
+         DALSampler, ClusterMarginSampler, BadgeSampler, TriSampler
     if sampler_type == "passive":
         return PassiveSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed, **kwargs)
     elif sampler_type == "uncertain-lm":
@@ -157,6 +125,9 @@ def get_sampler(sampler_type, train_data, labeller, label_model=None, revision_m
         return BadgeSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed, **kwargs)
     elif sampler_type == "coreset":
         return CoreSetSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed, **kwargs)
+    elif sampler_type in ["tri-pl", "tri-random", "tri-pl+random"]:
+        return TriSampler(train_data, labeller, label_model, revision_model, encoder, seed=seed,
+                              uncertain_type="rm", print_result=True, **kwargs)
     else:
         raise ValueError(f"sampler {sampler_type} not implemented.")
 
@@ -196,11 +167,7 @@ def evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data
     """
     Evaluate end model's performance with predicted labels
     """
-    # seed_everything(seed, workers=True)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    seed_everything(seed, workers=True)
     end_model = get_end_model(args.end_model)
     n_steps = int(np.ceil(len(pred_train_data) / end_model.hyperparas["batch_size"])) * args.em_epochs
     evaluation_step = int(np.ceil(len(pred_train_data) / end_model.hyperparas["batch_size"]))  # evaluate every epoch
@@ -235,6 +202,21 @@ def evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data
     return perf, end_model
 
 
+def plot_cov_acc(dataset, cov_list, acc_list, valid_f1_list, sample_size, output_path):
+    """
+    Plot the tradeoff between coverage and accuracy
+    """
+    plt.figure()
+    plt.plot(cov_list, acc_list, label="Label Acc")
+    plt.plot(cov_list, valid_f1_list, label="Valid F1")
+    plt.legend()
+    plt.xlabel("Coverage")
+    plt.ylabel("Acc/F1")
+    plt.title(f"{dataset}-{sample_size} labelled")
+    figpath = Path(output_path) / dataset / f"cov-acc-{sample_size}.jpg"
+    plt.savefig(figpath)
+
+
 def get_filter_probs(dataset, label_model, reviser, lm_theta, rm_theta):
     """
     Get the prediction result with filtering
@@ -253,9 +235,11 @@ def get_filter_probs(dataset, label_model, reviser, lm_theta, rm_theta):
     return filter_probs, active_indices
 
 
-def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_theta_size=10):
+def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_theta_size=10, alpha=0.05):
     """
     Estimate the coverage-accuracy tradeoff using validation set.
+    max_theta_size: discrete size for thresholds
+    alpha: risk that label accuracy fall below lower bound
     """
 
     lm_probs = label_model.predict_proba(train_data)
@@ -275,8 +259,8 @@ def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_
         rm_conf_thres = rm_conf_thres[::K]
 
     rm_conf_thres = np.append(rm_conf_thres, [1.1])
-
     acc_mat = np.zeros((len(lm_conf_thres), len(rm_conf_thres)))
+    acc_lb_mat = np.zeros_like(acc_mat)  # lower bound for label accuracy
     cov_mat = np.zeros_like(acc_mat)
     for i in range(len(lm_conf_thres)):
         for j in range(len(rm_conf_thres)):
@@ -288,15 +272,22 @@ def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_
             if len(valid_act_indices) > 0:
                 valid_act_labels = np.array(valid_data.labels)[valid_act_indices]
                 acc, nll, brier = evaluate_label_quality(valid_act_labels, valid_act_probs)
+                n_valid = len(valid_act_indices)
+                epsilon = np.sqrt(np.log(alpha) / (-2*n_valid))
+                acc_lb = max(acc - epsilon, 0.0)
             else:
                 acc = 0.0
+                acc_lb = 0.0
+
             acc_mat[i,j] = acc
+            acc_lb_mat[i,j] = acc_lb
             cov_mat[i,j] = coverage
 
     perf = {
         "lm_theta": lm_conf_thres,
         "rm_theta": rm_conf_thres,
         "acc": acc_mat,
+        "acc_lb": acc_lb_mat,
         "cov": cov_mat
     }
     return perf
@@ -322,27 +313,29 @@ def select_thresholds(train_data, valid_data, candidate_theta_list, label_model,
 
     best_f1 = 0
     selected_theta = None
-    f1_buffer = np.repeat(0.0, len(candidate_theta_list))
+    f1_buffer = np.repeat(-1.0, len(candidate_theta_list))
     # use recursive search to find the best F1
     if args.theta_explore_strategy in ["exhaustive", "random", "step"]:
+        indices = np.arange(len(candidate_theta_list))
         if args.theta_explore_strategy == "random":
-            candidate_theta_list = np.random.choice(candidate_theta_list, size=args.theta_explore_num, replace=False)
+            selected_indices = np.random.choice(indices, size=args.theta_explore_num, replace=False)
         elif args.theta_explore_strategy == "step":
             step = np.ceil(len(candidate_theta_list) / args.theta_explore_num).astype(int)
-            candidate_theta_list = candidate_theta_list[::step]
+            selected_indices = indices[::step]
+        else:
+            selected_indices = indices
+        # make sure the first and last element exist in selected indices
+        if 0 not in selected_indices:
+            selected_indices = np.concatenate(([0], selected_indices))
+        if indices[-1] not in selected_indices:
+            selected_indices = np.concatenate((selected_indices, [indices[-1]]))
 
-        for i in range(len(candidate_theta_list)):
+        for i in selected_indices:
+            f1 = get_valid_f1(i, f1_buffer)
             lm_theta, rm_theta = candidate_theta_list[i]
-            train_act_probs, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
-            pred_train_data = train_data.create_subset(train_act_indices)
-            if args.use_soft_labels:
-                pred_train_labels = train_act_probs
-            else:
-                pred_train_labels = train_act_probs.argmax(axis=1)
-            valid_perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, valid_data, args, seed)
-            f1_buffer[i] = valid_perf["test_f1"]
-            if valid_perf["test_f1"] > best_f1:
-                best_f1 = valid_perf["test_f1"]
+            f1_buffer[i] = f1
+            if f1 > best_f1:
+                best_f1 = f1
                 selected_theta = (lm_theta, rm_theta)
 
     elif args.theta_explore_strategy == "ternery":
@@ -365,7 +358,29 @@ def select_thresholds(train_data, valid_data, candidate_theta_list, label_model,
         best_f1 = get_valid_f1(l, f1_buffer)
         selected_theta = candidate_theta_list[l]
 
-    return selected_theta, best_f1
+    return selected_theta, best_f1, f1_buffer
+
+
+def calibrate_lm_threshold(valid_data, label_model, desired_acc=0.95):
+    lb = 0.5
+    rb = 1.0
+    lm_probs = label_model.predict_proba(valid_data)
+    lm_preds = label_model.predict(valid_data)
+    lm_conf = np.max(lm_probs, axis=1)
+    while rb - lb > 0.01:
+        mid = (lb + rb) / 2
+        selected_indices = np.nonzero(lm_conf > mid)[0]
+        if len(selected_indices) == 0:
+            rb = mid
+        else:
+            acc = accuracy_score(np.array(valid_data.labels)[selected_indices], lm_preds[selected_indices])
+            n_valid = len(selected_indices)
+            # epsilon = np.sqrt(np.log(alpha) / (-2 * n_valid))
+            if acc >= desired_acc:
+                rb = mid
+            else:
+                lb = mid
+    return rb
 
 
 def save_results(results_list, output_path, dataset, filename):
@@ -379,3 +394,30 @@ def save_results(results_list, output_path, dataset, filename):
 def update_results(results_dict, **kwargs):
     for key in kwargs:
         results_dict[key].append(kwargs[key])
+
+
+def plot_tsne(features, labels, labeled_indices, title):
+    if len(features) > 1000:
+        # random sampling
+        indices = np.random.choice(len(features), 1000, replace=False)
+        features = features[indices, :]
+        labels = np.array(labels)[indices]
+    else:
+        indices = np.arange(len(features))
+
+    pca = PCA(n_components=2)
+    sc = StandardScaler()
+    features = sc.fit_transform(features)
+    features = pca.fit_transform(features)
+    colors = []
+    color_list = ["blue", "orange", "yellow", "cyan"]
+    for i in range(len(indices)):
+        if indices[i] in labeled_indices:
+            colors.append(color_list[labels[i]])
+        else:
+            colors.append("grey")
+
+    plt.figure()
+    plt.scatter(features[:,0], features[:,1], c=colors)
+    plt.title(title)
+    plt.show()
