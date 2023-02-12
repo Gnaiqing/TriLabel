@@ -14,10 +14,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
                                                                    "bank-marketing", "census", "tennis", "basketball"])
-    parser.add_argument("--sampler", type=str, nargs="+", default=["passive", "uncertain-lm", "uncertain-rm",
-                                                                   "cluster-margin-rm", "tri-random", "tri-pl+random",
-                                                                   "badge", "coreset"])
-    parser.add_argument("--tag", type=str, default="00")
+    parser.add_argument("--sampler", type=str, nargs="+", default=["passive", "uncertain-rm","tri-pl+random"])
+    parser.add_argument("--tag", type=str, default="02")
     parser.add_argument("--output_path", type=str, default="output/")
     args = parser.parse_args()
 
@@ -33,8 +31,8 @@ if __name__ == "__main__":
                 results = json.load(readfile)
                 results_list = results["data"]
                 res = get_results(results_list)
-                f1_mean.append(res["test_f1"][1])
-                f1_stderr.append(res["test_f1_stderr"][1])
+                f1_mean.append(res["test_f1"][-1])
+                f1_stderr.append(res["test_f1_stderr"][-1])
             else:
                 print(f"Sampler {sampler} not found for dataset {dataset}")
 

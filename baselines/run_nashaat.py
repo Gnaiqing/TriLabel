@@ -12,38 +12,44 @@ def run_nashaat(train_data, valid_data, test_data, args, seed):
     Run nashaat pipeline to clean noisy labels
     """
     start = time.process_time()
-    results = {
-        "n_labeled": [],
-        "frac_labeled": [],
-        "label_acc": [],
-        "label_nll": [],
-        "label_brier": [],
-        "label_coverage": [],
-        "test_acc": [],
-        "test_f1": [],
-        "golden_test_acc": np.nan,
-        "golden_test_f1": np.nan,
-    }
-    label_model = get_label_model(args.label_model)
+    if not args.record_runtime:
+        results = {
+            "n_labeled": [],
+            "frac_labeled": [],
+            "label_acc": [],
+            "label_nll": [],
+            "label_brier": [],
+            "label_coverage": [],
+            "test_acc": [],
+            "test_f1": [],
+            "golden_test_acc": np.nan,
+            "golden_test_f1": np.nan,
+        }
+    else:
+        results = {}
+    label_model = get_label_model(args.label_model, seed=seed)
     covered_train_data = train_data.get_covered_subset()
     label_model.fit(dataset_train=covered_train_data,
                     dataset_valid=valid_data)
-    lm_train_probs = label_model.predict_proba(covered_train_data)
-    lm_train_preds = np.argmax(lm_train_probs, axis=1)
-    label_acc, label_nll, label_brier = evaluate_label_quality(covered_train_data.labels, lm_train_probs)
-    label_coverage = len(covered_train_data) / len(train_data)
-    if args.use_soft_labels:
-        pred_train_labels = lm_train_probs
-    else:
-        pred_train_labels = lm_train_preds
 
-    perf, _ = evaluate_end_model(covered_train_data, pred_train_labels, valid_data, test_data, args, seed)
-    update_results(results, n_labeled=0, frac_labeled=0.0,
-                   label_acc=label_acc, label_nll=label_nll, label_brier=label_brier, label_coverage=label_coverage,
-                   test_acc=perf["test_acc"], test_f1=perf["test_f1"])
-    golden_perf, _ = evaluate_end_model(train_data, train_data.labels, valid_data, test_data, args, seed)
-    results["golden_test_acc"] = golden_perf["test_acc"]
-    results["golden_test_f1"] = golden_perf["test_f1"]
+    if not args.record_runtime:
+        lm_train_probs = label_model.predict_proba(covered_train_data)
+        lm_train_preds = np.argmax(lm_train_probs, axis=1)
+        label_acc, label_nll, label_brier = evaluate_label_quality(covered_train_data.labels, lm_train_probs)
+        label_coverage = len(covered_train_data) / len(train_data)
+        if args.use_soft_labels:
+            pred_train_labels = lm_train_probs
+        else:
+            pred_train_labels = lm_train_preds
+
+        perf, _ = evaluate_end_model(covered_train_data, pred_train_labels, valid_data, test_data, args, seed)
+        update_results(results, n_labeled=0, frac_labeled=0.0,
+                       label_acc=label_acc, label_nll=label_nll, label_brier=label_brier, label_coverage=label_coverage,
+                       test_acc=perf["test_acc"], test_f1=perf["test_f1"])
+
+        golden_perf, _ = evaluate_end_model(train_data, train_data.labels, valid_data, test_data, args, seed)
+        results["golden_test_acc"] = golden_perf["test_acc"]
+        results["golden_test_f1"] = golden_perf["test_f1"]
 
     labeller = get_labeller(args.labeller)
     revised_train_data = copy.copy(train_data)
@@ -60,21 +66,22 @@ def run_nashaat(train_data, valid_data, test_data, args, seed):
         covered_train_data = revised_train_data.get_covered_subset()
         label_model = get_label_model(args.label_model)
         label_model.fit(dataset_train=covered_train_data, dataset_valid=valid_data)
-        lm_train_probs = label_model.predict_proba(covered_train_data)
-        lm_train_preds = np.argmax(lm_train_probs, axis=1)
-        label_acc, label_nll, label_brier = evaluate_label_quality(covered_train_data.labels, lm_train_probs)
-        label_coverage = len(covered_train_data) / len(train_data)
-        if args.use_soft_labels:
-            pred_train_labels = lm_train_probs
-        else:
-            pred_train_labels = lm_train_preds
-        perf, _ = evaluate_end_model(covered_train_data, pred_train_labels, valid_data, test_data, args, seed)
+        sampler.update_stats(train_data=revised_train_data, label_model=label_model)
         n_labeled = sampler.get_n_sampled()
         frac_labeled = n_labeled / len(train_data)
-        update_results(results, n_labeled=n_labeled, frac_labeled=frac_labeled,
-                       label_acc=label_acc, label_nll=label_nll, label_brier=label_brier, label_coverage=label_coverage,
-                       test_acc=perf["test_acc"], test_f1=perf["test_f1"])
-        sampler.update_stats(train_data=revised_train_data, label_model=label_model)
+        if not args.record_runtime:
+            lm_train_probs = label_model.predict_proba(covered_train_data)
+            lm_train_preds = np.argmax(lm_train_probs, axis=1)
+            label_acc, label_nll, label_brier = evaluate_label_quality(covered_train_data.labels, lm_train_probs)
+            label_coverage = len(covered_train_data) / len(train_data)
+            if args.use_soft_labels:
+                pred_train_labels = lm_train_probs
+            else:
+                pred_train_labels = lm_train_preds
+            perf, _ = evaluate_end_model(covered_train_data, pred_train_labels, valid_data, test_data, args, seed)
+            update_results(results, n_labeled=n_labeled, frac_labeled=frac_labeled,
+                           label_acc=label_acc, label_nll=label_nll, label_brier=label_brier, label_coverage=label_coverage,
+                           test_acc=perf["test_acc"], test_f1=perf["test_f1"])
 
     end = time.process_time()
     results["time"] = end - start
@@ -100,6 +107,7 @@ if __name__ == "__main__":
     parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
+    parser.add_argument("--record_runtime", action="store_true")
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="f1_macro")
     parser.add_argument("--repeats", type=int, default=10)

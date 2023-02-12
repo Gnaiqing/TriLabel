@@ -7,9 +7,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
                                                                    "bank-marketing", "census", "tennis", "basketball"])
-    parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "pl", "nashaat", "trilabel"])
-    parser.add_argument("--sampler", type=str, nargs="+", default=["passive", "uncertain-lm", "uncertain-rm",
-                                                                   "tri-pl+random","coreset"])
+    parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "nashaat", "trilabel"])
+    parser.add_argument("--sampler", type=str, nargs="+", default=["uncertain-rm"])
     parser.add_argument("--use_soft_labels", type=bool, default=True)
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--tag", type=str, default="test")
@@ -18,6 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample_per_iter", type=float, default=100)
     parser.add_argument("--desired_label_acc", type=float, default=None)
     parser.add_argument("--plot_performance", action="store_true")
+    parser.add_argument("--record_runtime", action="store_true")
     args = parser.parse_args()
     tag = args.tag
     for dataset in args.dataset:
@@ -28,6 +28,8 @@ if __name__ == "__main__":
             ext += " --use_soft_labels"
         if args.verbose:
             ext += " --verbose"
+        if args.record_runtime:
+            ext += " --record_runtime"
 
         for method in args.method:
             if method == "al":
@@ -47,14 +49,17 @@ if __name__ == "__main__":
                 print(cmd)
                 os.system(cmd)
             elif method == "trilabel":
-                trilabel_ext = ""
+                if args.record_runtime:
+                    trilabel_ext = " --record_runtime"
+                else:
+                    trilabel_ext = " --evaluate"
                 if args.desired_label_acc is not None:
-                    trilabel_ext += f"--desired_label_acc {args.desired_label_acc}"
+                    trilabel_ext += f"--desired_label_acc {args.desired_label_acc} --optimize_target coverage"
                 if args.plot_performance:
                     trilabel_ext += f" --plot_performance"
                 for sampler in args.sampler:
                     cmd = f"python trilabel.py --dataset {dataset} {ext} {trilabel_ext} " \
-                          f"--sampler {sampler} --evaluate --tag {tag}"
+                          f"--sampler {sampler} --tag {tag}"
                     print(cmd)
                     os.system(cmd)
 

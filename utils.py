@@ -202,18 +202,28 @@ def evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data
     return perf, end_model
 
 
-def plot_cov_acc(dataset, cov_list, acc_list, valid_f1_list, sample_size, output_path):
+def plot_performance(dataset, cov, est_acc, est_epsilon, gt_acc, est_f1, test_f1, sample_size, output_path):
     """
-    Plot the tradeoff between coverage and accuracy
+    Plot performance estimation that shows the tradeoff between accuracy and coverage
     """
-    plt.figure()
-    plt.plot(cov_list, acc_list, label="Label Acc")
-    plt.plot(cov_list, valid_f1_list, label="Valid F1")
-    plt.legend()
-    plt.xlabel("Coverage")
-    plt.ylabel("Acc/F1")
-    plt.title(f"{dataset}-{sample_size} labelled")
-    figpath = Path(output_path) / dataset / f"cov-acc-{sample_size}.jpg"
+    plt.rcParams.update({'font.size': 14})
+    fig, ax1 = plt.subplots()
+    ax2 = ax1.twinx()
+    ax1.plot(cov, est_acc, label="Estimated Label Acc")
+    est_acc_lb = np.clip(est_acc-est_epsilon, 0, 1)
+    est_acc_ub = np.clip(est_acc+est_epsilon, 0, 1)
+    ax1.fill_between(cov, est_acc_lb, est_acc_ub, alpha=0.1)
+    ax1.plot(cov, gt_acc, label="GT Label Acc")
+    ax2.plot(cov, est_f1, 'go', label="Valid F1 score")
+    ax2.plot(cov, test_f1, 'k^', label="Test F1 score")
+    ax1.set_xlabel("Label Coverage")
+    ax1.set_ylabel("Label Accuracy")
+    ax2.set_ylabel("F1 score")
+    # ax1.legend(loc=0)
+    # ax2.legend(loc=0)
+    ax1.set_title(f"{dataset}")
+    fig.tight_layout()
+    figpath = Path(output_path) / dataset / f"performance_plot_{sample_size}.jpg"
     plt.savefig(figpath)
 
 
@@ -260,7 +270,7 @@ def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_
 
     rm_conf_thres = np.append(rm_conf_thres, [1.1])
     acc_mat = np.zeros((len(lm_conf_thres), len(rm_conf_thres)))
-    acc_lb_mat = np.zeros_like(acc_mat)  # lower bound for label accuracy
+    epsilon_mat = np.zeros((len(lm_conf_thres), len(rm_conf_thres)))
     cov_mat = np.zeros_like(acc_mat)
     for i in range(len(lm_conf_thres)):
         for j in range(len(rm_conf_thres)):
@@ -273,34 +283,31 @@ def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_
                 valid_act_labels = np.array(valid_data.labels)[valid_act_indices]
                 acc, nll, brier = evaluate_label_quality(valid_act_labels, valid_act_probs)
                 n_valid = len(valid_act_indices)
-                epsilon = np.sqrt(np.log(alpha) / (-2*n_valid))
-                acc_lb = max(acc - epsilon, 0.0)
+                epsilon = np.sqrt(np.log(alpha/2) / (-2*n_valid))
+
             else:
                 acc = 0.0
-                acc_lb = 0.0
+                epsilon = np.nan
 
             acc_mat[i,j] = acc
-            acc_lb_mat[i,j] = acc_lb
+            epsilon_mat[i,j] = epsilon
             cov_mat[i,j] = coverage
 
     perf = {
         "lm_theta": lm_conf_thres,
         "rm_theta": rm_conf_thres,
         "acc": acc_mat,
-        "acc_lb": acc_lb_mat,
+        "epsilon": epsilon_mat,  # half length of confidence interval for acc
         "cov": cov_mat
     }
     return perf
 
 
-def select_thresholds(train_data, valid_data, candidate_theta_list, label_model, reviser, args, seed):
+def select_thresholds(train_data, valid_data, test_data, candidate_theta_list, label_model, reviser, args, seed):
     """
     Select the best combination of thresholds using performance on validation set
     """
-    def get_valid_f1(theta_idx, f1_buffer):
-        if f1_buffer[theta_idx] > 0:
-            return f1_buffer[theta_idx]
-
+    def get_f1(theta_idx):
         lm_theta, rm_theta = candidate_theta_list[theta_idx]
         train_act_probs, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
         pred_train_data = train_data.create_subset(train_act_indices)
@@ -309,12 +316,16 @@ def select_thresholds(train_data, valid_data, candidate_theta_list, label_model,
         else:
             pred_train_labels = train_act_probs.argmax(axis=1)
         valid_perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, valid_data, args, seed)
-        return valid_perf["test_f1"]
+        if args.plot_performance:
+            test_perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, seed)
+            return valid_perf["test_f1"], test_perf["test_f1"]
+        else:
+            return valid_perf["test_f1"], np.nan
 
     best_f1 = 0
     selected_theta = None
-    f1_buffer = np.repeat(-1.0, len(candidate_theta_list))
-    # use recursive search to find the best F1
+    valid_f1_list = np.repeat(-1.0, len(candidate_theta_list))
+    test_f1_list = np.repeat(-1.0, len(candidate_theta_list))
     if args.theta_explore_strategy in ["exhaustive", "random", "step"]:
         indices = np.arange(len(candidate_theta_list))
         if args.theta_explore_strategy == "random":
@@ -331,34 +342,35 @@ def select_thresholds(train_data, valid_data, candidate_theta_list, label_model,
             selected_indices = np.concatenate((selected_indices, [indices[-1]]))
 
         for i in selected_indices:
-            f1 = get_valid_f1(i, f1_buffer)
+            valid_f1, test_f1 = get_f1(i)
             lm_theta, rm_theta = candidate_theta_list[i]
-            f1_buffer[i] = f1
-            if f1 > best_f1:
-                best_f1 = f1
+            valid_f1_list[i] = valid_f1
+            test_f1_list[i] = test_f1
+            if valid_f1 > best_f1:
+                best_f1 = valid_f1
                 selected_theta = (lm_theta, rm_theta)
 
-    elif args.theta_explore_strategy == "ternery":
-        l = 0
-        r = len(candidate_theta_list)
-        while r - l > 2:
-            m1 = l + (r-l) // 3
-            m2 = r - (r-l) // 3
-            f1_1 = get_valid_f1(m1, f1_buffer)
-            f1_buffer[m1] = f1_1
-            f1_2 = get_valid_f1(m2, f1_buffer)
-            f1_buffer[m2] = f1_2
-            if f1_1 > f1_2:
-                r = m2
-            elif f1_1 < f1_2:
-                l = m1
-            else:
-                l = m1
-                r = m2
-        best_f1 = get_valid_f1(l, f1_buffer)
-        selected_theta = candidate_theta_list[l]
+    # elif args.theta_explore_strategy == "ternery":
+    #     l = 0
+    #     r = len(candidate_theta_list)
+    #     while r - l > 2:
+    #         m1 = l + (r-l) // 3
+    #         m2 = r - (r-l) // 3
+    #         f1_1 = get_valid_f1(m1, f1_buffer)
+    #         f1_buffer[m1] = f1_1
+    #         f1_2 = get_valid_f1(m2, f1_buffer)
+    #         f1_buffer[m2] = f1_2
+    #         if f1_1 > f1_2:
+    #             r = m2
+    #         elif f1_1 < f1_2:
+    #             l = m1
+    #         else:
+    #             l = m1
+    #             r = m2
+    #     best_f1 = get_valid_f1(l, f1_buffer)
+    #     selected_theta = candidate_theta_list[l]
 
-    return selected_theta, best_f1, f1_buffer
+    return selected_theta, valid_f1_list, test_f1_list
 
 
 def calibrate_lm_threshold(valid_data, label_model, desired_acc=0.95):

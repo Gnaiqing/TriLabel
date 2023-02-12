@@ -38,6 +38,7 @@ def plot_dist(dataset, train_sum, valid_sum, test_sum, filepath):
     test_sum = (test_sum + epsilon) / (1 + epsilon * n_bar)
     x = np.arange(n_bar)
     width = 0.2
+    plt.rcParams.update({'font.size': 14})
     fig, ax = plt.subplots()
     ax.bar(x - width, train_sum, width, color='blue')
     ax.bar(x, valid_sum, width, color='orange')
@@ -50,7 +51,7 @@ def plot_dist(dataset, train_sum, valid_sum, test_sum, filepath):
     ax.set_xlabel("Score")
     ax.set_ylabel("Frequency")
     ax.legend(["Train", "Valid", "Test"])
-    fig.suptitle(f"{dataset}", fontsize=14)
+    fig.suptitle(f"{dataset}")
     ax.set_title(f"PSI: {psi_train_val:.2f}(Val) {psi_train_test:.2f}(Test)")
     plt.savefig(filepath)
 

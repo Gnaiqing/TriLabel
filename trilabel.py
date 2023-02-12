@@ -2,20 +2,21 @@ import argparse
 import time
 from labeller.labeller import get_labeller
 import numpy as np
-import logging
 from sklearn.metrics import accuracy_score
 from utils import evaluate_end_model, save_results, get_sampler, get_label_model, update_results, get_filter_probs, \
-    preprocess_data, evaluate_label_quality, get_reviser, select_thresholds, estimate_cov_acc_tradeoff, plot_cov_acc, \
-    calibrate_lm_threshold
+    preprocess_data, evaluate_label_quality, get_reviser, select_thresholds, estimate_cov_acc_tradeoff,\
+    plot_performance, calibrate_lm_threshold
 
 
 def run_trilabel(train_data, valid_data, test_data, args, seed):
+    start = time.process_time()
     if args.evaluate:
-        start = time.process_time()
+        # evaluate label quality
         results = {
             "n_labeled": [],  # number of expert labeled data
             "n_sampled": [],  # number of expert labeled data + pseudo-labeled data
             "frac_labeled": [],  # fraction of expert labeled data
+            "sampled_acc": [],  # accuracy of sampled data
             "label_acc": [],  # label accuracy
             "label_nll": [],  # label NLL score
             "label_brier": [],  # label brier score
@@ -28,11 +29,27 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
             "golden_test_acc": np.nan,  # end model's test accuracy using golden labels
             "golden_test_f1": np.nan  # end model's test f1 using golden labels
         }
+    else:
+        results = {}
+
+    if args.record_runtime:
+        last_timestamp = start
+        lm_time = 0   # time used for training label model
+        em_time = 0   # time used for training end model
+        al_time = 0   # time used for sampling and training AL model
+        thres_time = 0  # time used for threshold selection
+        perf_time = 0  # time used for estimating coverage-accuracy tradeoff
+
     train_act_probs, train_act_indices = None, None
     label_model = get_label_model(args.label_model, seed=seed)
     covered_train_data = train_data.get_covered_subset()
     label_model.fit(dataset_train=covered_train_data,
                     dataset_valid=valid_data)
+
+    if args.record_runtime:
+        cur_timestamp = time.process_time()
+        lm_time += cur_timestamp - last_timestamp
+        last_timestamp = cur_timestamp
 
     if args.evaluate:
         lm_train_probs = label_model.predict_proba(covered_train_data)
@@ -44,7 +61,7 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
         label_acc, label_nll, label_brier = evaluate_label_quality(covered_train_data.labels, lm_train_probs)
         label_coverage = len(covered_train_data) / len(train_data)
         perf, _ = evaluate_end_model(covered_train_data, pred_train_labels, valid_data, test_data, args, seed)
-        update_results(results, n_labeled=0, frac_labeled=0.0,n_sampled=0,
+        update_results(results, n_labeled=0, frac_labeled=0.0,n_sampled=0, sampled_acc=np.nan,
                        label_acc=label_acc, label_nll=label_nll, label_brier=label_brier,
                        label_coverage=label_coverage,dp_coverage=label_coverage, al_coverage=0.0,
                        al_acc=np.nan, test_acc=perf["test_acc"], test_f1=perf["test_f1"])
@@ -73,17 +90,21 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
         frac_labeled = n_labeled / len(train_data)
         reviser.train_revision_model(indices, labels)
         sampler.update_stats()
+        if args.record_runtime:
+            cur_timestamp = time.process_time()
+            al_time += cur_timestamp - last_timestamp
+            last_timestamp = cur_timestamp
+
         cov_acc_dict = estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser)
         candidate_theta_list = []
         cov_list = []
         acc_list = []
+        epsilon_list = []
         for i in range(len(cov_acc_dict["lm_theta"])):
             for j in range(len(cov_acc_dict["rm_theta"])):
-                if args.strict_constraint:
-                    acc = cov_acc_dict["acc_lb"][i,j]
-                else:
-                    acc = cov_acc_dict["acc"][i,j]
 
+                acc = cov_acc_dict["acc"][i,j]
+                epsilon = cov_acc_dict["epsilon"][i,j]
                 cov = cov_acc_dict["cov"][i,j]
                 if args.desired_label_acc is not None and acc < args.desired_label_acc:
                     continue
@@ -104,6 +125,7 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
 
                 cov_list.insert(idx, cov)
                 acc_list.insert(idx, acc)
+                epsilon_list.insert(idx, epsilon)
                 candidate_theta_list.insert(idx, (cov_acc_dict["lm_theta"][i], cov_acc_dict["rm_theta"][j]))
                 while idx > 0 and acc_list[idx-1] <= acc:
                     cov_list.pop(idx-1)
@@ -111,26 +133,61 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
                     candidate_theta_list.pop(idx-1)
                     idx -= 1
 
+        if args.record_runtime:
+            cur_timestamp = time.process_time()
+            perf_time += cur_timestamp - last_timestamp
+            last_timestamp = cur_timestamp
+
         if len(candidate_theta_list) == 0:
             # No configuration can satisfy user provided constraints at current label budget
             print(f"Constraints cannot be satisfied at label budget {n_labeled}. Increasing sample size.")
+            if args.evaluate:
+                indices, labels = sampler.get_sampled_points()
+                sampled_acc = accuracy_score(np.array(train_data.labels)[indices], labels)
+                update_results(results, n_labeled=n_labeled, frac_labeled=frac_labeled, n_sampled=len(indices),
+                               sampled_acc=sampled_acc, label_acc=np.nan, label_nll=np.nan, label_brier=np.nan,
+                               label_coverage=np.nan, dp_coverage=np.nan, al_coverage=np.nan,
+                               al_acc=np.nan, test_acc=np.nan, test_f1=np.nan)
             continue
 
-        selected_theta, best_f1, f1_buffer = select_thresholds(train_data, valid_data, candidate_theta_list,
-                                                               label_model, reviser, args, seed)
 
-        if args.plot_performance:
-            theta_indices = np.nonzero(f1_buffer > 0)[0]
-            evaluated_f1 = f1_buffer[theta_indices]
-            evaluated_cov = np.array(cov_list)[theta_indices]
-            evaluated_acc = np.array(acc_list)[theta_indices]
-            plot_cov_acc(args.dataset, evaluated_cov, evaluated_acc, evaluated_f1, n_labeled, args.output_path)
+        if args.optimize_target == "f1":
+            selected_theta, valid_f1, test_f1 = select_thresholds(train_data, valid_data, test_data,
+                                                                   candidate_theta_list,
+                                                                   label_model, reviser, args, seed)
 
+            if args.plot_performance:
+                theta_indices = np.nonzero(valid_f1 > 0)[0]
+                evaluated_valid_f1 = valid_f1[theta_indices]
+                evaluated_test_f1 = test_f1[theta_indices]
+                evaluated_cov = np.array(cov_list)[theta_indices]
+                evaluated_acc = np.array(acc_list)[theta_indices]
+                evaluated_epsilon = np.array(epsilon_list)[theta_indices]
+                gt_acc = np.zeros_like(evaluated_acc)
+                for i in range(len(theta_indices)):
+                    lm_theta, rm_theta = candidate_theta_list[theta_indices[i]]
+                    train_probs, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
+                    train_preds = np.argmax(train_probs, axis=1)
+                    train_labels = np.array(train_data.labels)[train_act_indices]
+                    gt_acc[i] = accuracy_score(train_labels, train_preds)
+
+                plot_performance(args.dataset, evaluated_cov, evaluated_acc, evaluated_epsilon, gt_acc,
+                                 evaluated_valid_f1, evaluated_test_f1, n_labeled, args.output_path)
+        elif args.optimize_target == "accuracy":
+            selected_theta = candidate_theta_list[0]  # select the one with highest label accuracy
+        else:
+            selected_theta = candidate_theta_list[-1]  # select the one with highest label coverage
 
         train_act_probs, train_act_indices = get_filter_probs(train_data, label_model, reviser,
                                                               selected_theta[0], selected_theta[1])
+        if args.record_runtime:
+            cur_timestamp = time.process_time()
+            thres_time += cur_timestamp - last_timestamp
+            last_timestamp = cur_timestamp
 
         if args.evaluate:
+            indices, labels = sampler.get_sampled_points()
+            sampled_acc = accuracy_score(np.array(train_data.labels)[indices], labels)
             lm_train_conf = np.max(lm_train_probs, axis=1)
             dp_coverage = np.sum(lm_train_conf >= selected_theta[0]) / len(train_data)
             al_coverage = len(train_act_indices) / len(train_data) - dp_coverage
@@ -145,20 +202,28 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
                 pred_train_labels = train_act_probs.argmax(axis=1)
             perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, seed)
             update_results(results, n_labeled=n_labeled, frac_labeled=frac_labeled,n_sampled=len(indices),
-                           label_acc=label_acc, label_nll=label_nll, label_brier=label_brier,
+                           sampled_acc=sampled_acc, label_acc=label_acc, label_nll=label_nll, label_brier=label_brier,
                            label_coverage=label_coverage, dp_coverage=dp_coverage, al_coverage=al_coverage,
                            al_acc=al_acc, test_acc=perf["test_acc"], test_f1=perf["test_f1"])
 
-        if args.stop_criteria == "label-quality":
-            break
-        if args.stop_criteria == "em-performance" and best_f1 >= args.desired_em_performance:
-            break
+    if args.record_runtime:
+        pred_train_data = train_data.create_subset(train_act_indices)
+        if args.use_soft_labels:
+            pred_train_labels = train_act_probs
+        else:
+            pred_train_labels = train_act_probs.argmax(axis=1)
+        perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, args.seed)
+        cur_timestamp = time.process_time()
+        em_time += cur_timestamp - last_timestamp
 
-    if args.evaluate:
-        end = time.process_time()
-        results["time"] = end - start
-    else:
-        results = None
+    end = time.process_time()
+    results["time"] = end - start
+    if args.record_runtime:
+        results["lm_time"] = lm_time
+        results["em_time"] = em_time
+        results["al_time"] = al_time
+        results["perf_time"] = perf_time
+        results["thres_time"] = thres_time
 
     return train_act_probs, train_act_indices, results
 
@@ -176,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
     parser.add_argument("--desired_label_acc", type=float, default=None)  # Desired Label Accuracy
     parser.add_argument("--desired_label_cov", type=float, default=None)  # Desired Label Coverage
-    parser.add_argument("--desired_em_performance", type=float, default=None)  # Desired end model performance
+    parser.add_argument("--optimize_target", type=str, choices=["accuracy", "coverage", "f1"], default="f1")
     # active learning sample strategy and model
     parser.add_argument("--sampler", type=str, default="uncertain-rm")
     parser.add_argument("--sample_per_iter", type=float, default=0.01)  # Sample per iteration (batch size)
@@ -187,13 +252,12 @@ if __name__ == "__main__":
     parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
-    parser.add_argument("--evaluate", action="store_true") # evaluate label quality and performance using golden labels
+    parser.add_argument("--evaluate", action="store_true")  # evaluate label quality and performance using golden labels
+    parser.add_argument("--record_runtime", action="store_true")  # record runtime of every component
     parser.add_argument("--plot_performance", action="store_true")  # draw performance plot
     parser.add_argument("--theta_explore_strategy", type=str, default="step")
     parser.add_argument("--theta_explore_num", type=int, default=10)  # maximum number of evaluated theta thresholds
-    parser.add_argument("--stop_criteria", type=str, choices=["budget", "label-quality", "em-performance"],
-                        default="budget")
-    parser.add_argument("--strict_constraint", action="store_true")
+
     parser.add_argument("--labeller", type=str, default="oracle")
     parser.add_argument("--metric", type=str, default="f1_macro")
     parser.add_argument("--repeats", type=int, default=10)
@@ -202,10 +266,10 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--tag", type=str, default="test")
     args = parser.parse_args()
+    if args.record_runtime:
+        args.evaluate = False  # No evaluation of label quality when recording pipeline runtime
+
     train_data, valid_data, test_data = preprocess_data(args)
-    log = logging.getLogger("lightning_light.utilities.seed")
-    log.propagate = False
-    log.setLevel(logging.ERROR)
 
     if args.sample_budget <= 1:
         args.sample_budget = np.ceil(args.sample_budget * len(train_data)).astype(int)
@@ -214,27 +278,13 @@ if __name__ == "__main__":
         args.sample_budget = int(args.sample_budget)
         args.sample_per_iter = int(args.sample_per_iter)
 
-    if args.evaluate:
-        np.random.seed(args.seed)
-        run_seeds = np.random.randint(1, 100000, args.repeats)
-        results_list = []
-        for i in range(args.repeats):
-            print(f"Start run {i}")
-            _, _, results = run_trilabel(train_data, valid_data, test_data, args, seed=run_seeds[i])
-            results_list.append(results)
+    np.random.seed(args.seed)
+    run_seeds = np.random.randint(1, 100000, args.repeats)
+    results_list = []
+    for i in range(args.repeats):
+        print(f"Start run {i}")
+        _, _, results = run_trilabel(train_data, valid_data, test_data, args, seed=run_seeds[i])
+        results_list.append(results)
 
-        id_tag = f"trilabel_{args.label_model}_{args.end_model}_{args.sampler}_{args.tag}"
-        save_results(results_list, args.output_path, args.dataset, f"{id_tag}.json")
-    else:
-        train_act_probs, train_act_indices, _ = run_trilabel(train_data, valid_data, test_data, args, seed=args.seed)
-        pred_train_data = train_data.create_subset(train_act_indices)
-        if args.use_soft_labels:
-            pred_train_labels = train_act_probs
-        else:
-            pred_train_labels = train_act_probs.argmax(axis=1)
-        label_acc, label_nll, label_brier = evaluate_label_quality(pred_train_data.labels, train_act_probs)
-        label_coverage = len(pred_train_data) / len(train_data)
-        perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, args.seed)
-        print("Label Accuracy: ", label_acc)
-        print("Label Coverage: ", label_coverage)
-        print("End model test F1: ", perf["test_f1"])
+    id_tag = f"trilabel_{args.label_model}_{args.end_model}_{args.sampler}_{args.tag}"
+    save_results(results_list, args.output_path, args.dataset, f"{id_tag}.json")
