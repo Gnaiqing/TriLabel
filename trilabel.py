@@ -3,6 +3,7 @@ import time
 from labeller.labeller import get_labeller
 import numpy as np
 from sklearn.metrics import accuracy_score
+from calibrator.lm_ensemble import EnsembleCalibrator
 from utils import evaluate_end_model, save_results, get_sampler, get_label_model, update_results, get_filter_probs, \
     preprocess_data, evaluate_label_quality, get_reviser, select_thresholds, estimate_cov_acc_tradeoff,\
     plot_performance, calibrate_lm_threshold
@@ -35,16 +36,30 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
     if args.record_runtime:
         last_timestamp = start
         lm_time = 0   # time used for training label model
-        em_time = 0   # time used for training end model
         al_time = 0   # time used for sampling and training AL model
         thres_time = 0  # time used for threshold selection
         perf_time = 0  # time used for estimating coverage-accuracy tradeoff
 
     train_act_probs, train_act_indices = None, None
-    label_model = get_label_model(args.label_model, seed=seed)
+    M = train_data.n_lf
     covered_train_data = train_data.get_covered_subset()
-    label_model.fit(dataset_train=covered_train_data,
-                    dataset_valid=valid_data)
+    if args.calibration is None:
+        label_model = get_label_model(args.label_model, seed=seed)
+        label_model.fit(dataset_train=covered_train_data,
+                        dataset_valid=valid_data)
+    elif args.calibration == "EN":
+        label_model = EnsembleCalibrator(train_data, valid_data, args.label_model,
+                                         ensemble_size=10, feature_size=M, bootstrap=False, seed=seed)
+    elif args.calibration == "EN+FS":
+        feature_size = np.floor(M * 0.8).astype(int)
+        label_model = EnsembleCalibrator(train_data, valid_data, args.label_model,
+                                         ensemble_size=10, feature_size=feature_size,bootstrap=False, seed=seed)
+    else:
+        feature_size = np.floor(M * 0.8).astype(int)
+        label_model = EnsembleCalibrator(train_data, valid_data, args.label_model,
+                                         ensemble_size=10, feature_size=feature_size, bootstrap=True, seed=seed)
+
+
 
     if args.record_runtime:
         cur_timestamp = time.process_time()
@@ -206,21 +221,10 @@ def run_trilabel(train_data, valid_data, test_data, args, seed):
                            label_coverage=label_coverage, dp_coverage=dp_coverage, al_coverage=al_coverage,
                            al_acc=al_acc, test_acc=perf["test_acc"], test_f1=perf["test_f1"])
 
-    if args.record_runtime:
-        pred_train_data = train_data.create_subset(train_act_indices)
-        if args.use_soft_labels:
-            pred_train_labels = train_act_probs
-        else:
-            pred_train_labels = train_act_probs.argmax(axis=1)
-        perf, _ = evaluate_end_model(pred_train_data, pred_train_labels, valid_data, test_data, args, args.seed)
-        cur_timestamp = time.process_time()
-        em_time += cur_timestamp - last_timestamp
-
     end = time.process_time()
     results["time"] = end - start
     if args.record_runtime:
         results["lm_time"] = lm_time
-        results["em_time"] = em_time
         results["al_time"] = al_time
         results["perf_time"] = perf_time
         results["thres_time"] = thres_time
@@ -238,13 +242,13 @@ if __name__ == "__main__":
     parser.add_argument("--extract_fn", type=str, default="bert")  # method used to extract features
     parser.add_argument("--max_dim", type=int, default=300)  # dimension reduction using PCA
     # User provided constraints
-    parser.add_argument("--sample_budget", type=float, default=0.05)  # Total sample budget
+    parser.add_argument("--sample_budget", type=float, default=300)  # Total sample budget
     parser.add_argument("--desired_label_acc", type=float, default=None)  # Desired Label Accuracy
     parser.add_argument("--desired_label_cov", type=float, default=None)  # Desired Label Coverage
     parser.add_argument("--optimize_target", type=str, choices=["accuracy", "coverage", "f1"], default="f1")
     # active learning sample strategy and model
     parser.add_argument("--sampler", type=str, default="uncertain-rm")
-    parser.add_argument("--sample_per_iter", type=float, default=0.01)  # Sample per iteration (batch size)
+    parser.add_argument("--sample_per_iter", type=float, default=100)  # Sample per iteration (batch size)
     parser.add_argument("--revision_model", type=str, default="mlp")
     # label model and end models
     parser.add_argument("--label_model", type=str, default="metal")
@@ -252,6 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--em_epochs", type=int, default=100)
     parser.add_argument("--use_soft_labels", action="store_true")
     # other settings
+    parser.add_argument("--calibration", type=str, choices=["EN", "EN+FS", "EN+FS+BS"], default=None)
     parser.add_argument("--evaluate", action="store_true")  # evaluate label quality and performance using golden labels
     parser.add_argument("--record_runtime", action="store_true")  # record runtime of every component
     parser.add_argument("--plot_performance", action="store_true")  # draw performance plot

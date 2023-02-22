@@ -32,6 +32,7 @@ class EnsembleCalibrator:
             bagging_train_data = copy.copy(train_data)
             bagging_train_data.weak_labels = bagging_weak_labels.tolist()
             bagging_train_data.n_lf = len(selected_features)
+            bagging_train_data = bagging_train_data.get_covered_subset()
             bagging_valid_data = copy.copy(valid_data)
             bagging_valid_data.weak_labels = bagging_valid_weak_labels.tolist()
             bagging_valid_data.n_lf = len(selected_features)

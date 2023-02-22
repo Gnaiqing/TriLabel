@@ -33,14 +33,15 @@ def get_results(results_list):
         res[key] = np.array(res[key])
 
     print_res = {}
-    print_res["time"] = np.repeat(res["time"].mean(axis=0), res["frac_labeled"].shape[1])
+    # print_res["time"] = np.repeat(res["time"].mean(axis=0), res["frac_labeled"].shape[1])
     print_res["n_labeled"] = res["n_labeled"][0,:]
-    print_res["frac_labeled"] = res["frac_labeled"][0,:]
-    print_res["golden_test_f1"] = res["golden_test_f1"].mean()
+    # print_res["frac_labeled"] = res["frac_labeled"][0,:]
+    # print_res["golden_test_f1"] = res["golden_test_f1"].mean()
 
-    for metric in ["label_acc", "label_coverage", "test_f1"]:
+    for metric in ["label_brier", "label_acc", "label_coverage", "test_f1"]:
         print_res[metric] = res[metric].mean(axis=0)
-        print_res[f"{metric}_stderr"] = res[metric].std(axis=0) / np.sqrt(len(res[metric]))
+        # print_res[f"{metric}_stderr"] = res[metric].std(axis=0) / np.sqrt(len(res[metric]))
+
     return print_res
 
 
@@ -94,7 +95,7 @@ def plot_results(dataset, results_map, metric, output_path, tag):
     ax.set_xlabel("Label Budget")
     ax.set_ylabel(metric)
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
-    # ax.legend()
+    ax.legend()
     ax.set_title(dataset)
     figpath = Path(output_path) / dataset / f"{dataset}_{metric}_{tag}.jpg"
     fig.savefig(figpath)
@@ -106,7 +107,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
                                                                    "bank-marketing", "census", "tennis"])
     parser.add_argument("--method", type=str, nargs="+", default=["al", "nashaat", "trilabel"])
-    parser.add_argument("--exp_type", type=str, default="baseline", choices=["baseline", "sampler", "active_frac"])
+    parser.add_argument("--exp_type", type=str, default="baseline")
     parser.add_argument("--label_model", type=str, default="metal")
     parser.add_argument("--end_model", type=str, default="mlp")
     parser.add_argument("--sampler", type=str, nargs="+", default=["passive",  "uncertain-rm", "tri-pl+random"])
@@ -209,6 +210,30 @@ if __name__ == "__main__":
                 plt.title(dataset)
                 figpath = Path(args.output_path) / dataset / f"{dataset}_frac_{args.tag}.jpg"
                 plt.savefig(figpath)
+
+        elif args.exp_type == "calibration":
+            for calibration in ["origin", "en", "fs", "bs"]:
+                if calibration == "origin":
+                    id_tag = f"trilabel_{args.label_model}_{args.end_model}_uncertain-rm_{args.tag}"
+                else:
+                    id_tag = f"trilabel_{args.label_model}_{args.end_model}_uncertain-rm_{args.tag}_{calibration}"
+                filepath = Path(args.output_path) / dataset / f"{id_tag}.json"
+                if os.path.exists(filepath):
+                    readfile = open(filepath, "r")
+                    results = json.load(readfile)
+                    results_list = results["data"]
+                    res = get_results(results_list)
+                    df_res = pd.DataFrame(res)
+                    results_map[calibration] = res
+                    if args.print_results:
+                        print(f"Dataset: {dataset}, Calibration: {calibration}")
+                        print(df_res)
+
+            if args.plot_results:
+                for metric in ["label_brier", "label_acc", "test_f1"]:
+                    plot_results(dataset, results_map, metric, args.output_path, args.tag + "_calib")
+
+
 
 
 

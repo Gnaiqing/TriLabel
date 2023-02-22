@@ -6,7 +6,7 @@ bert_embedding_datasets = ["youtube", "sms", "imdb", "yelp"]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, nargs="+", default=["youtube", "sms", "imdb", "yelp", "PhishingWebsites",
-                                                                   "bank-marketing", "census", "tennis", "basketball"])
+                                                                   "bank-marketing", "census", "tennis"])
     parser.add_argument("--method", type=str, nargs="+", default=["al", "aw", "nashaat", "trilabel"])
     parser.add_argument("--sampler", type=str, nargs="+", default=["uncertain-rm"])
     parser.add_argument("--use_soft_labels", type=bool, default=True)
@@ -16,8 +16,14 @@ if __name__ == "__main__":
     parser.add_argument("--sample_budget", type=float, default=300)
     parser.add_argument("--sample_per_iter", type=float, default=100)
     parser.add_argument("--desired_label_acc", type=float, default=None)
+    parser.add_argument("--desired_label_cov", type=float, default=None)
     parser.add_argument("--plot_performance", action="store_true")
     parser.add_argument("--record_runtime", action="store_true")
+    parser.add_argument("--theta_explore_strategy", type=str, default="step")
+    parser.add_argument("--theta_explore_num", type=int, default=10)
+    parser.add_argument("--optimize_target", type=str, choices=["accuracy", "coverage", "f1"], default="f1")
+    parser.add_argument("--calibration", type=str, choices=["EN", "EN+FS", "EN+FS+BS"], default=None)
+
     args = parser.parse_args()
     tag = args.tag
     for dataset in args.dataset:
@@ -53,10 +59,25 @@ if __name__ == "__main__":
                     trilabel_ext = " --record_runtime"
                 else:
                     trilabel_ext = " --evaluate"
+
                 if args.desired_label_acc is not None:
-                    trilabel_ext += f"--desired_label_acc {args.desired_label_acc} --optimize_target coverage"
+                    trilabel_ext += f" --desired_label_acc {args.desired_label_acc}"
+
+                if args.desired_label_cov is not None:
+                    trilabel_ext += f" --desired_label_cov {args.desired_label_cov}"
+
                 if args.plot_performance:
                     trilabel_ext += f" --plot_performance"
+
+                if args.optimize_target == "f1":
+                    trilabel_ext += f" --theta_explore_strategy {args.theta_explore_strategy}"
+                    trilabel_ext += f" --theta_explore_num {args.theta_explore_num}"
+                else:
+                    trilabel_ext += f" --optimize_target {args.optimize_target}"
+
+                if args.calibration is not None:
+                    trilabel_ext += f" --calibration {args.calibration}"
+
                 for sampler in args.sampler:
                     cmd = f"python trilabel.py --dataset {dataset} {ext} {trilabel_ext} " \
                           f"--sampler {sampler} --tag {tag}"

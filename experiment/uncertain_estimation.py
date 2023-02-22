@@ -135,6 +135,7 @@ if __name__ == "__main__":
     else:
         train_data, valid_data, test_data = load_real_dataset(args.dataset_path, args.dataset, args.extract_fn)
 
+    lf_sum = train_data.lf_summary()
     np.random.seed(args.seed)
     run_seeds = np.random.randint(1, 100000, args.repeats)
     if args.feature_size is None:

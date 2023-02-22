@@ -251,47 +251,90 @@ def estimate_cov_acc_tradeoff(train_data, valid_data, label_model, reviser, max_
     max_theta_size: discrete size for thresholds
     alpha: risk that label accuracy fall below lower bound
     """
-
-    lm_probs = label_model.predict_proba(train_data)
-    lm_conf = np.trunc(np.max(lm_probs, axis=1) * 1000) / 1000
-    lm_conf_thres = np.unique(lm_conf)
+    # discretize the candidate theta space
+    lm_train_probs = label_model.predict_proba(train_data)
+    lm_train_conf = np.max(lm_train_probs, axis=1)
+    lm_valid_probs = label_model.predict_proba(valid_data)
+    lm_valid_preds = np.argmax(lm_valid_probs, axis=1)
+    lm_valid_tp = lm_valid_preds == np.array(valid_data.labels)
+    lm_valid_conf = np.max(lm_valid_probs, axis=1)
+    lm_conf_thres = np.unique(lm_train_conf)
     if len(lm_conf_thres) > max_theta_size:
         K = int(len(lm_conf_thres) / max_theta_size)
         lm_conf_thres = lm_conf_thres[::K]
 
     lm_conf_thres = np.append(lm_conf_thres, [1.1])
+    k1 = len(lm_conf_thres)
 
-    rm_probs = reviser.predict_proba(train_data)
-    rm_conf = np.trunc(np.max(rm_probs, axis=1) * 1000) / 1000
-    rm_conf_thres = np.unique(rm_conf)
+    rm_train_probs = reviser.predict_proba(train_data)
+    rm_train_conf = np.max(rm_train_probs, axis=1)
+    rm_valid_probs = reviser.predict_proba(valid_data)
+    rm_valid_preds = np.argmax(rm_valid_probs, axis=1)
+    rm_valid_tp = rm_valid_preds == np.array(valid_data.labels)
+    rm_valid_conf = np.max(rm_valid_probs, axis=1)
+    rm_conf_thres = np.unique(rm_train_conf)
     if len(rm_conf_thres) > max_theta_size:
         K = int(len(rm_conf_thres) / max_theta_size)
         rm_conf_thres = rm_conf_thres[::K]
 
     rm_conf_thres = np.append(rm_conf_thres, [1.1])
-    acc_mat = np.zeros((len(lm_conf_thres), len(rm_conf_thres)))
-    epsilon_mat = np.zeros((len(lm_conf_thres), len(rm_conf_thres)))
+    k2 = len(rm_conf_thres)
+
+    lm_train_bin = lm_train_conf.reshape(-1,1) >= lm_conf_thres.reshape(1,-1)
+    lm_train_bin = np.sum(lm_train_bin, axis=1) - 1
+    rm_train_bin = rm_train_conf.reshape(-1,1) >= rm_conf_thres.reshape(1,-1)
+    rm_train_bin = np.sum(rm_train_bin, axis=1) - 1
+    lm_valid_bin = np.sum(lm_valid_conf.reshape(-1,1) >= lm_conf_thres.reshape(1,-1), axis=1) - 1
+    rm_valid_bin = np.sum(rm_valid_conf.reshape(-1,1) >= rm_conf_thres.reshape(1,-1), axis=1) - 1
+
+    n_train_mat = np.zeros((k1, k2))  # training points in each bin
+    n_valid_mat = np.zeros_like(n_train_mat)  # valid points in each bin
+    lm_tp_mat = np.zeros_like(n_train_mat)  # True prediction points in each bin for label model
+    rm_tp_mat = np.zeros_like(n_train_mat)  # True prediction points in each bin for AL model
+    for i in range(len(train_data)):
+        n_train_mat[lm_train_bin[i], rm_train_bin[i]] += 1
+
+    for i in range(len(valid_data)):
+        n_valid_mat[lm_valid_bin[i], rm_valid_bin[i]] += 1
+        if lm_valid_tp[i]:
+            lm_tp_mat[lm_valid_bin[i], rm_valid_bin[i]] += 1
+        if rm_valid_tp[i]:
+            rm_tp_mat[lm_valid_bin[i], rm_valid_bin[i]] += 1
+
+    acc_mat = np.zeros((k1, k2))
+    epsilon_mat = np.zeros_like(acc_mat)
     cov_mat = np.zeros_like(acc_mat)
     for i in range(len(lm_conf_thres)):
         for j in range(len(rm_conf_thres)):
-            lm_theta = lm_conf_thres[i]
-            rm_theta = rm_conf_thres[j]
-            _, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
-            coverage = len(train_act_indices) / len(train_data)
-            valid_act_probs, valid_act_indices = get_filter_probs(valid_data, label_model, reviser, lm_theta, rm_theta)
-            if len(valid_act_indices) > 0:
-                valid_act_labels = np.array(valid_data.labels)[valid_act_indices]
-                acc, nll, brier = evaluate_label_quality(valid_act_labels, valid_act_probs)
-                n_valid = len(valid_act_indices)
-                epsilon = np.sqrt(np.log(alpha/2) / (-2*n_valid))
-
+            cov_mat[i,j] = 1 - np.sum(n_train_mat[:i,:j]) / len(train_data)
+            n_valid_filtered = len(valid_data) - np.sum(n_valid_mat[:i,:j])
+            if n_valid_filtered > 0:
+                acc_mat[i,j] = (np.sum(lm_tp_mat[i:,:]) + np.sum(rm_tp_mat[:i, j:])) / n_valid_filtered
+                epsilon_mat[i,j] = np.sqrt(np.log(alpha/2) / (-2 * n_valid_filtered))
             else:
-                acc = 0.0
-                epsilon = np.nan
+                acc_mat[i,j] = 0.0
+                epsilon_mat[i,j] = np.nan
 
-            acc_mat[i,j] = acc
-            epsilon_mat[i,j] = epsilon
-            cov_mat[i,j] = coverage
+    # for i in range(len(lm_conf_thres)):
+    #     for j in range(len(rm_conf_thres)):
+    #         lm_theta = lm_conf_thres[i]
+    #         rm_theta = rm_conf_thres[j]
+    #         _, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
+    #         coverage = len(train_act_indices) / len(train_data)
+    #         valid_act_probs, valid_act_indices = get_filter_probs(valid_data, label_model, reviser, lm_theta, rm_theta)
+    #         if len(valid_act_indices) > 0:
+    #             valid_act_labels = np.array(valid_data.labels)[valid_act_indices]
+    #             acc, nll, brier = evaluate_label_quality(valid_act_labels, valid_act_probs)
+    #             n_valid = len(valid_act_indices)
+    #             epsilon = np.sqrt(np.log(alpha/2) / (-2*n_valid))
+    #
+    #         else:
+    #             acc = 0.0
+    #             epsilon = np.nan
+    #
+    #         acc_mat[i,j] = acc
+    #         epsilon_mat[i,j] = epsilon
+    #         cov_mat[i,j] = coverage
 
     perf = {
         "lm_theta": lm_conf_thres,
@@ -310,6 +353,8 @@ def select_thresholds(train_data, valid_data, test_data, candidate_theta_list, l
     def get_f1(theta_idx):
         lm_theta, rm_theta = candidate_theta_list[theta_idx]
         train_act_probs, train_act_indices = get_filter_probs(train_data, label_model, reviser, lm_theta, rm_theta)
+        if len(train_act_indices) == 0:
+            return -1, -1
         pred_train_data = train_data.create_subset(train_act_indices)
         if args.use_soft_labels:
             pred_train_labels = train_act_probs
@@ -326,49 +371,30 @@ def select_thresholds(train_data, valid_data, test_data, candidate_theta_list, l
     selected_theta = None
     valid_f1_list = np.repeat(-1.0, len(candidate_theta_list))
     test_f1_list = np.repeat(-1.0, len(candidate_theta_list))
-    if args.theta_explore_strategy in ["exhaustive", "random", "step"]:
-        indices = np.arange(len(candidate_theta_list))
+
+    indices = np.arange(len(candidate_theta_list))
+    if len(indices) > args.theta_explore_num and args.theta_explore_strategy in ["random", "step"]:
         if args.theta_explore_strategy == "random":
             selected_indices = np.random.choice(indices, size=args.theta_explore_num, replace=False)
-        elif args.theta_explore_strategy == "step":
+        else:  # systematic sampling
             step = np.ceil(len(candidate_theta_list) / args.theta_explore_num).astype(int)
             selected_indices = indices[::step]
-        else:
-            selected_indices = indices
-        # make sure the first and last element exist in selected indices
-        if 0 not in selected_indices:
-            selected_indices = np.concatenate(([0], selected_indices))
-        if indices[-1] not in selected_indices:
-            selected_indices = np.concatenate((selected_indices, [indices[-1]]))
+    else:
+        selected_indices = indices
+    # make sure the first and last element exist in selected indices
+    if 0 not in selected_indices:
+        selected_indices = np.concatenate(([0], selected_indices))
+    if indices[-1] not in selected_indices:
+        selected_indices = np.concatenate((selected_indices, [indices[-1]]))
 
-        for i in selected_indices:
-            valid_f1, test_f1 = get_f1(i)
-            lm_theta, rm_theta = candidate_theta_list[i]
-            valid_f1_list[i] = valid_f1
-            test_f1_list[i] = test_f1
-            if valid_f1 > best_f1:
-                best_f1 = valid_f1
-                selected_theta = (lm_theta, rm_theta)
-
-    # elif args.theta_explore_strategy == "ternery":
-    #     l = 0
-    #     r = len(candidate_theta_list)
-    #     while r - l > 2:
-    #         m1 = l + (r-l) // 3
-    #         m2 = r - (r-l) // 3
-    #         f1_1 = get_valid_f1(m1, f1_buffer)
-    #         f1_buffer[m1] = f1_1
-    #         f1_2 = get_valid_f1(m2, f1_buffer)
-    #         f1_buffer[m2] = f1_2
-    #         if f1_1 > f1_2:
-    #             r = m2
-    #         elif f1_1 < f1_2:
-    #             l = m1
-    #         else:
-    #             l = m1
-    #             r = m2
-    #     best_f1 = get_valid_f1(l, f1_buffer)
-    #     selected_theta = candidate_theta_list[l]
+    for i in selected_indices:
+        valid_f1, test_f1 = get_f1(i)
+        lm_theta, rm_theta = candidate_theta_list[i]
+        valid_f1_list[i] = valid_f1
+        test_f1_list[i] = test_f1
+        if valid_f1 > best_f1:
+            best_f1 = valid_f1
+            selected_theta = (lm_theta, rm_theta)
 
     return selected_theta, valid_f1_list, test_f1_list
 
